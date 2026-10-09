@@ -1772,6 +1772,14 @@
 	Measurement information	Информация за измерването
 	Measurement snapping	Прилепване при измерване
 	Export measurements as CSV	Експортирай измерванията като CSV
+	Item (label for measurements and counts)	Позиция (етикет за измервания и преброявания)
+	e.g. Gully, Kerb, 150mm pipe	напр. дъждоприемник, бордюр, тръба 150 мм
+	Count places a numbered marker per click. Type the item above first.	Преброяването поставя номериран маркер при всяко щракване. Първо въведете позицията по-горе.
+	Type the item to count in the Item box first, for example Gully.	Първо въведете в полето Позиция какво да се брои, например Дъждоприемник.
+	Take-off	Количествена сметка
+	Label measurements or place counts to build a take-off.	Задайте етикети на измерванията или поставете преброявания, за да съставите количествена сметка.
+	Export take-off as CSV	Експортиране на количествената сметка като CSV
+	Saved take-off.	Количествената сметка е запазена.
 	Distance	Разстояние
 	Perimeter	Периметър
 	Area	Площ

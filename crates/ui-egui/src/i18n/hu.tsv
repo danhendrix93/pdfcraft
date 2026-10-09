@@ -1837,6 +1837,14 @@
 	Measurement information	Mérési adatok
 	Measurement snapping	Illesztés méréskor
 	Export measurements as CSV	Mérések exportálása CSV-be
+	Item (label for measurements and counts)	Tétel (mérések és darabszámok címkéje)
+	e.g. Gully, Kerb, 150mm pipe	pl. víznyelő, szegély, 150 mm-es cső
+	Count places a numbered marker per click. Type the item above first.	A Számlálás minden kattintásra egy számozott jelölőt helyez el. Előbb írja be fent a tételt.
+	Type the item to count in the Item box first, for example Gully.	Előbb írja be a Tétel mezőbe, mit szeretne számolni, például Víznyelő.
+	Take-off	Mennyiségkimutatás
+	Label measurements or place counts to build a take-off.	Címkézze fel a méréseket vagy helyezzen el számlálásokat a mennyiségkimutatáshoz.
+	Export take-off as CSV	Mennyiségkimutatás exportálása CSV-be
+	Saved take-off.	A mennyiségkimutatás mentve.
 	Distance	Távolság
 	Perimeter	Kerület
 	Area	Terület

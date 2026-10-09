@@ -1909,6 +1909,14 @@
 	Measurement information	Информация об измерениях
 	Measurement snapping	Привязка измерений
 	Export measurements as CSV	Экспортировать измерения в CSV
+	Item (label for measurements and counts)	Позиция (метка для измерений и подсчётов)
+	e.g. Gully, Kerb, 150mm pipe	напр. дождеприёмник, бордюр, труба 150 мм
+	Count places a numbered marker per click. Type the item above first.	Подсчёт ставит пронумерованный маркер при каждом щелчке. Сначала введите позицию выше.
+	Type the item to count in the Item box first, for example Gully.	Сначала введите в поле «Позиция», что нужно подсчитать, например Дождеприёмник.
+	Take-off	Ведомость объёмов
+	Label measurements or place counts to build a take-off.	Подпишите измерения или расставьте подсчёты, чтобы составить ведомость объёмов.
+	Export take-off as CSV	Экспортировать ведомость объёмов в CSV
+	Saved take-off.	Ведомость объёмов сохранена.
 	Distance	Расстояние
 	Perimeter	Периметр
 	Area	Площадь

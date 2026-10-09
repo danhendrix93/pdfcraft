@@ -17,8 +17,10 @@ fn hue(g: &ToolGroup) -> Color32 {
 pub fn left_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::left("tool_panel")
-        .resizable(false)
-        .exact_size(272.0)
+        // Drag the edge to widen tool panels such as Measure objects.
+        .resizable(true)
+        .default_size(272.0)
+        .size_range(240.0..=640.0)
         .frame(
             egui::Frame::NONE
                 .fill(t.panel)

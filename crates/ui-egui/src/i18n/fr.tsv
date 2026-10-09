@@ -1841,6 +1841,14 @@
 	Measurement information	Informations de mesure
 	Measurement snapping	Accrochage de la mesure
 	Export measurements as CSV	Exporter les mesures en CSV
+	Item (label for measurements and counts)	Élément (libellé des mesures et comptages)
+	e.g. Gully, Kerb, 150mm pipe	ex. avaloir, bordure, tuyau 150 mm
+	Count places a numbered marker per click. Type the item above first.	Compter place un repère numéroté à chaque clic. Saisissez d’abord l’élément ci-dessus.
+	Type the item to count in the Item box first, for example Gully.	Saisissez d’abord l’élément à compter dans la zone Élément, par exemple Avaloir.
+	Take-off	Métré
+	Label measurements or place counts to build a take-off.	Étiquetez des mesures ou placez des comptages pour constituer un métré.
+	Export take-off as CSV	Exporter le métré en CSV
+	Saved take-off.	Métré enregistré.
 	Distance	Distance
 	Perimeter	Périmètre
 	Area	Aire

@@ -172,7 +172,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, doc: &Document, v
         if tool == Tool::Count {
             if resp.clicked() {
                 if state.label.trim().is_empty() {
-                    state.error = Some(tl!("Type the item to count in Label first, for example Gully.").into());
+                    state.error = Some(tl!("Type the item to count in the Item box first, for example Gully.").into());
                 } else {
                     state.error = None;
                     view.pending_edit = Some(Edit::AddCount(takeoff::NewCount {
@@ -303,15 +303,16 @@ fn finish(state: &mut MeasureView, pending: &mut Option<Edit>, doc: &Document, p
     }
 }
 pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    egui::ScrollArea::vertical().id_salt("measure-panel").show(ui, |ui| panel_body(app, ui, t));
+    egui::ScrollArea::vertical().id_salt("measure-panel").auto_shrink([false, false]).show(ui, |ui| panel_body(app, ui, t));
 }
-fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
+fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let Some((index, id)) = app.active_ids() else {
         ui.label(tl!("Open a PDF to measure it."));
         return;
     };
     let mut tool = None;
-    ui.horizontal(|ui| {
+    // Wrap rather than widen the panel's content past its edge.
+    ui.horizontal_wrapped(|ui| {
         for (label, value) in [("Distance", Tool::Distance), ("Perimeter", Tool::Perimeter), ("Area", Tool::Area), ("Count", Tool::Count)] {
             if ui.selectable_label(app.quick_tool == QuickTool::Measure(value), tl!(label)).clicked() {
                 tool = Some(value);
@@ -340,9 +341,21 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
             state.precision = scale.precision;
         }
     }
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new(tl!("Item (label for measurements and counts)")).color(t.text_muted));
+    egui::Frame::NONE.fill(t.field).stroke(Stroke::new(1.0, t.border)).corner_radius(4).inner_margin(egui::Margin::symmetric(6, 4)).show(ui, |ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut state.label)
+                .hint_text(tl!("e.g. Gully, Kerb, 150mm pipe"))
+                .frame(egui::Frame::NONE)
+                .desired_width(f32::INFINITY)
+                .char_limit(128),
+        );
+    });
+    ui.add_space(4.0);
     ui.label(tl!("Click vertices. Enter or double-click finishes a perimeter or area. Click the first point to close an area."));
     ui.label(tl!("Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels."));
-    ui.label(tl!("Count places a numbered marker per click. The label names the item being measured or counted."));
+    ui.label(tl!("Count places a numbered marker per click. Type the item above first."));
     ui.separator();
     ui.label(tl!("Measurement information"));
     if let Some(reading) = &state.reading {
@@ -355,10 +368,6 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
     } else {
         ui.label(tl!("Click the first point to begin."));
     }
-    ui.horizontal(|ui| {
-        ui.label(tl!("Label"));
-        ui.add(egui::TextEdit::singleline(&mut state.label).desired_width(130.0).char_limit(128));
-    });
     ui.separator();
     ui.checkbox(&mut state.snap_enabled, tl!("Snap to drawing"));
     if state.snap_enabled {

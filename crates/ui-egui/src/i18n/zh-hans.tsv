@@ -1780,6 +1780,14 @@
 	Measurement information	测量信息
 	Measurement snapping	测量吸附
 	Export measurements as CSV	将测量结果导出为 CSV
+	Item (label for measurements and counts)	项目（测量和计数的标签）
+	e.g. Gully, Kerb, 150mm pipe	例如：雨水口、路缘石、150mm 管道
+	Count places a numbered marker per click. Type the item above first.	计数：每次单击放置一个编号标记。请先在上方输入项目。
+	Type the item to count in the Item box first, for example Gully.	请先在“项目”框中输入要计数的项目，例如“雨水口”。
+	Take-off	工程量清单
+	Label measurements or place counts to build a take-off.	为测量添加标签或放置计数以生成工程量清单。
+	Export take-off as CSV	将工程量清单导出为 CSV
+	Saved take-off.	已保存工程量清单。
 	Distance	距离
 	Perimeter	周长
 	Area	面积

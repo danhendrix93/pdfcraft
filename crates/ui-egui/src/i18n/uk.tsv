@@ -1912,6 +1912,14 @@
 	Measurement information	Відомості про вимірювання
 	Measurement snapping	Прив’язування вимірювань
 	Export measurements as CSV	Експортувати вимірювання як CSV
+	Item (label for measurements and counts)	Позиція (мітка для вимірювань і підрахунків)
+	e.g. Gully, Kerb, 150mm pipe	напр. дощоприймач, бордюр, труба 150 мм
+	Count places a numbered marker per click. Type the item above first.	Підрахунок ставить пронумерований маркер за кожним клацанням. Спершу введіть позицію вище.
+	Type the item to count in the Item box first, for example Gully.	Спершу введіть у полі «Позиція», що потрібно підрахувати, наприклад Дощоприймач.
+	Take-off	Відомість обсягів
+	Label measurements or place counts to build a take-off.	Підпишіть вимірювання або розставте підрахунки, щоб скласти відомість обсягів.
+	Export take-off as CSV	Експортувати відомість обсягів у CSV
+	Saved take-off.	Відомість обсягів збережено.
 	Distance	Відстань
 	Perimeter	Периметр
 	Area	Площа

@@ -1842,6 +1842,14 @@
 	Measurement information	Messinformationen
 	Measurement snapping	Einrasten beim Messen
 	Export measurements as CSV	Messungen als CSV exportieren
+	Item (label for measurements and counts)	Position (Bezeichnung für Messungen und Zählungen)
+	e.g. Gully, Kerb, 150mm pipe	z. B. Straßenablauf, Bordstein, Rohr 150 mm
+	Count places a numbered marker per click. Type the item above first.	Zählen setzt pro Klick eine nummerierte Markierung. Geben Sie zuerst oben die Position ein.
+	Type the item to count in the Item box first, for example Gully.	Geben Sie zuerst im Feld Position ein, was gezählt werden soll, z. B. Straßenablauf.
+	Take-off	Mengenermittlung
+	Label measurements or place counts to build a take-off.	Beschriften Sie Messungen oder setzen Sie Zählungen, um eine Mengenermittlung zu erstellen.
+	Export take-off as CSV	Mengenermittlung als CSV exportieren
+	Saved take-off.	Mengenermittlung gespeichert.
 	Distance	Abstand
 	Perimeter	Umfang
 	Area	Fläche
