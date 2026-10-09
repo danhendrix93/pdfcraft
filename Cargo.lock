@@ -3601,6 +3601,7 @@ dependencies = [
  "pdfcraft-redact",
  "pdfcraft-render",
  "pdfcraft-sign",
+ "pdfcraft-takeoff",
  "pdfcraft-xfa",
  "pdfcraft-xfdf",
  "png 0.18.1",
@@ -3786,6 +3787,18 @@ dependencies = [
  "security-framework",
  "sha1",
  "sha2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pdfcraft-takeoff"
+version = "0.4.0"
+dependencies = [
+ "pdfcraft-annot",
+ "pdfcraft-cos",
+ "pdfcraft-measure",
+ "pdfcraft-model",
+ "serde",
  "thiserror 2.0.21",
 ]
 

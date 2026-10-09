@@ -529,6 +529,14 @@ pub fn tools() -> Vec<ToolDef> {
             .ro().cmd("measure.snap").with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"at":point(),"tolerance":{"type":"number","minimum":0,"maximum":10000},"endpoints":{"type":"boolean"},"midpoints":{"type":"boolean"},"intersections":{"type":"boolean"},"paths":{"type":"boolean"}}), &["doc","page","at"])),
         t("measure_export", "Export measurements as CSV", "Atomically write saved measurement values, labels, authors and scale ratios as spreadsheet-safe CSV. Returns how many unsupported measurements were left out.")
             .cmd("measure.export").with(schema(json!({"doc":doc(),"out":path_arg()}), &["doc","out"])),
+        t("takeoff_count", "Place a count marker", "Add an undoable numbered count marker (a small filled circle) centred at a point, for counting symbols such as gullies or manholes. Markers are numbered per item across the document.")
+            .with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"at":point(),"item":{"type":"string","minLength":1,"maxLength":512},"color":color(),"author":{"type":"string","maxLength":512}}), &["doc","page","at","item"])),
+        t("takeoff_counts", "List count markers", "Saved count markers with their item, number and centre in display coordinates.")
+            .ro().with(schema(json!({"doc":doc()}), &["doc"])),
+        t("takeoff_summary", "Quantity take-off summary", "Count markers and saved measurements totalled per take-off item. A measurement's label names its item; blank labels are grouped as Untagged. Markers total as count (unit nr), distances and perimeters as length, areas as area, one line per item and unit. Returns how many unsupported measurements were left out.")
+            .ro().with(schema(json!({"doc":doc()}), &["doc"])),
+        t("takeoff_export", "Export quantity take-off as CSV", "Atomically write the take-off summary (item, quantity, total, unit, count, pages) as spreadsheet-safe CSV, totals rounded to precision decimal places (default 2).")
+            .with(schema(json!({"doc":doc(),"out":path_arg(),"precision":{"type":"integer","minimum":0,"maximum":6}}), &["doc","out"])),
         t("comment_list", "List comments", "Every comment (annotation other than links, form widgets and pop-ups) with its page, index, id, type, author, text, date, rectangle, colour, review status and replies.")
             .ro()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1, "description": "Only this page." } }), &["doc"])),

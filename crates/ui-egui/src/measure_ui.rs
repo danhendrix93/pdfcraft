@@ -4,6 +4,7 @@ use egui::{Color32, Pos2, Stroke};
 use pdfcraft_engine::{
     Document, Edit, Style,
     measure::{self, Kind, NewMeasurement, Point, Reading, Scale},
+    takeoff,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -12,6 +13,8 @@ pub enum Tool {
     Perimeter,
     Area,
     Calibrate,
+    /// Take-off count markers, tagged with the label as their item.
+    Count,
 }
 impl Tool {
     pub fn name(self) -> &'static str {
@@ -20,6 +23,7 @@ impl Tool {
             Self::Perimeter => "perimeter",
             Self::Area => "area",
             Self::Calibrate => "calibrate",
+            Self::Count => "count",
         }
     }
     pub fn from_name(s: &str) -> Option<Self> {
@@ -28,6 +32,7 @@ impl Tool {
             "perimeter" => Some(Self::Perimeter),
             "area" => Some(Self::Area),
             "calibrate" => Some(Self::Calibrate),
+            "count" => Some(Self::Count),
             _ => None,
         }
     }
@@ -63,6 +68,8 @@ pub struct MeasureView {
     paths: Option<(usize, u64, Result<measure::snap::Geometry, String>)>,
     /// Saved measurements per edit generation, for the panel.
     listing: Option<(u64, Result<measure::Listing, String>)>,
+    /// Take-off totals per edit generation, for the panel.
+    takeoff: Option<(u64, Result<Vec<takeoff::Line>, String>)>,
 }
 impl Default for MeasureView {
     fn default() -> Self {
@@ -87,6 +94,7 @@ impl Default for MeasureView {
             seeded_page: None,
             paths: None,
             listing: None,
+            takeoff: None,
         }
     }
 }
@@ -161,6 +169,26 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, doc: &Document, v
             point = measure::snap::constrain(*last, point);
         }
         hover = Some(point);
+        if tool == Tool::Count {
+            if resp.clicked() {
+                if state.label.trim().is_empty() {
+                    state.error = Some(tl!("Type the item to count in Label first, for example Gully.").into());
+                } else {
+                    state.error = None;
+                    view.pending_edit = Some(Edit::AddCount(takeoff::NewCount {
+                        page,
+                        at: point,
+                        item: state.label.clone(),
+                        color: [0.89, 0.13, 0.13],
+                        author: author.clone(),
+                    }));
+                }
+            }
+            if snap.is_some() {
+                ui.painter().circle_stroke(screen(point), 6.0, Stroke::new(1.0, Color32::from_rgb(46, 158, 92)));
+            }
+            return;
+        }
         if resp.clicked() {
             if state.page != Some(page) {
                 state.cancel();
@@ -284,7 +312,7 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
     };
     let mut tool = None;
     ui.horizontal(|ui| {
-        for (label, value) in [("Distance", Tool::Distance), ("Perimeter", Tool::Perimeter), ("Area", Tool::Area)] {
+        for (label, value) in [("Distance", Tool::Distance), ("Perimeter", Tool::Perimeter), ("Area", Tool::Area), ("Count", Tool::Count)] {
             if ui.selectable_label(app.quick_tool == QuickTool::Measure(value), tl!(label)).clicked() {
                 tool = Some(value);
             }
@@ -296,6 +324,9 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
     let state = &mut app.views[index].measure;
     if state.listing.as_ref().is_none_or(|(g, _)| *g != doc.edit_generation()) {
         state.listing = Some((doc.edit_generation(), doc.measurements()));
+    }
+    if state.takeoff.as_ref().is_none_or(|(g, _)| *g != doc.edit_generation()) {
+        state.takeoff = Some((doc.edit_generation(), takeoff_lines(doc)));
     }
     if state.seeded_page != Some(page) {
         state.seeded_page = Some(page);
@@ -311,6 +342,7 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
     }
     ui.label(tl!("Click vertices. Enter or double-click finishes a perimeter or area. Click the first point to close an area."));
     ui.label(tl!("Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels."));
+    ui.label(tl!("Count places a numbered marker per click. The label names the item being measured or counted."));
     ui.separator();
     ui.label(tl!("Measurement information"));
     if let Some(reading) = &state.reading {
@@ -397,6 +429,28 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
         }
     }
     let export = ui.button(tl!("Export measurements as CSV")).clicked();
+    ui.separator();
+    ui.label(tl!("Take-off"));
+    match state.takeoff.as_ref().map(|(_, l)| l) {
+        None => {}
+        Some(Ok(lines)) if lines.is_empty() => {
+            ui.label(tl!("Label measurements or place counts to build a take-off."));
+        }
+        Some(Ok(lines)) => {
+            egui::Grid::new("takeoff-grid").striped(true).show(ui, |ui| {
+                for l in lines {
+                    ui.label(&l.item);
+                    let precision = if l.quantity == takeoff::Quantity::Count { 0 } else { usize::from(state.precision.min(6)) };
+                    ui.label(format!("{:.precision$} {}", l.total, l.unit));
+                    ui.end_row();
+                }
+            });
+        }
+        Some(Err(e)) => {
+            ui.colored_label(Color32::from_rgb(190, 50, 50), e);
+        }
+    }
+    let export_takeoff = ui.button(tl!("Export take-off as CSV")).clicked();
     if apply && let Some(info) = info {
         let result =
             doc.measurement_to_user(page, [0.0, 0.0]).and_then(|a| doc.measurement_to_user(page, [1.0, 0.0]).map(|b| (a, b))).and_then(|(a, b)| {
@@ -431,6 +485,12 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
     if export {
         export_csv(app);
     }
+    if export_takeoff {
+        export_takeoff_csv(app);
+    }
+}
+fn takeoff_lines(doc: &Document) -> Result<Vec<takeoff::Line>, String> {
+    Ok(takeoff::summarise(&doc.measurements()?.measurements, &doc.counts()?))
 }
 pub(crate) fn command(app: &mut PdfCraftApp, id: &str) {
     app.left = LeftPanel::Tool("measure");
@@ -443,6 +503,38 @@ pub(crate) fn command(app: &mut PdfCraftApp, id: &str) {
     }
     if id == "measure.export" {
         export_csv(app);
+    }
+}
+fn export_takeoff_csv(app: &mut PdfCraftApp) {
+    let Some((index, id)) = app.active_ids() else { return };
+    let precision = app.views[index].measure.precision;
+    match app.session.get(id).ok_or_else(|| "no such document".to_string()).and_then(takeoff_lines) {
+        Err(e) => app.notify(&e),
+        Ok(lines) => save_csv(app, "takeoff.csv", takeoff::csv(&lines, precision), tl!("Saved take-off.")),
+    }
+}
+fn save_csv(app: &mut PdfCraftApp, name: &'static str, csv: String, done: &'static str) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let write =
+            move |app: &mut PdfCraftApp, path: std::path::PathBuf| match crate::editing::write_atomically(&path.to_string_lossy(), csv.as_bytes()) {
+                Ok(()) => app.notify(done),
+                Err(e) => app.notify(e.to_string()),
+            };
+        match app.export_dir_override.as_ref().map(|d| std::path::PathBuf::from(d).join(name)) {
+            Some(path) => write(app, path),
+            None => {
+                let dialog = rfd::AsyncFileDialog::new().set_file_name(name).add_filter("CSV", &["csv"]);
+                app.ask_one(crate::pickers::Ask::Save(dialog), None, write);
+            }
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = done;
+        if let Err(e) = crate::editing::download(name, csv.as_bytes()) {
+            app.notify(&e);
+        }
     }
 }
 fn export_csv(app: &mut PdfCraftApp) {
