@@ -56,6 +56,43 @@ impl Kind {
     }
 }
 
+/// How lengths are written. Areas are always decimal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case", tag = "kind", content = "denominator")]
+pub enum Format {
+    /// "12.35 m", to the scale's precision.
+    #[default]
+    Decimal,
+    /// "3-1/4 in", to the nearest 1/denominator (2 to 128, a power of two).
+    Fraction(u16),
+    /// `12' 6-1/2"` for a scale in feet; inches to the nearest 1/denominator, or decimal
+    /// inches to the scale's precision when the denominator is 0.
+    FeetInches(u16),
+}
+fn valid_denominator(d: u16) -> bool {
+    (2..=128).contains(&d) && d.is_power_of_two()
+}
+fn gcd(a: u64, b: u64) -> u64 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+/// `v` as a whole number and a reduced fraction of 1/den: "3-1/4", "3", "1/4".
+fn fraction(v: f64, den: u16) -> String {
+    let den = u64::from(den.max(1));
+    let v = v.abs();
+    let mut whole = v.floor();
+    let mut num = ((v - whole) * den as f64).round() as u64;
+    if num >= den {
+        whole += 1.0;
+        num = 0;
+    }
+    if num == 0 {
+        return format!("{whole:.0}");
+    }
+    let g = gcd(num, den).max(1);
+    let (num, den) = (num / g, den / g);
+    if whole == 0.0 { format!("{num}/{den}") } else { format!("{whole:.0}-{num}/{den}") }
+}
+
 /// Conversion from PDF user units to real-world units. Y can use a different scale.
 /// Distance and area conversion factors are relative to X (the rectilinear measure
 /// dictionary, ISO 32000-2 §12.9).
@@ -69,6 +106,7 @@ pub struct Scale {
     pub area_unit: String,
     pub precision: u8,
     pub ratio: String,
+    pub format: Format,
 }
 impl Default for Scale {
     fn default() -> Self {
@@ -81,6 +119,7 @@ impl Default for Scale {
             area_unit: "in^2".into(),
             precision: 2,
             ratio: "1 in = 1 in".into(),
+            format: Format::Decimal,
         }
     }
 }
@@ -95,6 +134,7 @@ impl Scale {
             area_unit: format!("{unit}^2"),
             precision,
             ratio: format!("1 pt = {units_per_user_unit} {unit}"),
+            format: Format::Decimal,
         };
         out.validate()?;
         Ok(out)
@@ -119,6 +159,14 @@ impl Scale {
         if self.precision > 6 {
             return Err(invalid("precision must be between 0 and 6 decimal places"));
         }
+        match self.format {
+            Format::Decimal | Format::FeetInches(0) => {}
+            Format::Fraction(d) | Format::FeetInches(d) if valid_denominator(d) => {}
+            _ => return Err(invalid("fraction denominators must be a power of two from 2 to 128")),
+        }
+        if matches!(self.format, Format::FeetInches(_)) && self.unit != "ft" {
+            return Err(invalid("feet and inches needs a scale in ft"));
+        }
         // Units are text strings, so non-ASCII labels such as "m²" are allowed.
         for s in [&self.unit, &self.area_unit] {
             let n = s.chars().count();
@@ -130,6 +178,27 @@ impl Scale {
             return Err(invalid("invalid scale ratio"));
         }
         Ok(())
+    }
+    /// A length in this scale's unit, written in its format.
+    pub fn format_length(&self, value: f64) -> String {
+        let p = usize::from(self.precision);
+        match self.format {
+            Format::Decimal => format!("{value:.p$} {}", self.unit),
+            Format::Fraction(den) => format!("{} {}", fraction(value, den), self.unit),
+            Format::FeetInches(den) => {
+                let total = value.abs() * 12.0;
+                let mut feet = (total / 12.0).floor();
+                let mut inches = total - feet * 12.0;
+                let mut text = if den == 0 { format!("{inches:.p$}") } else { fraction(inches, den) };
+                // Rounding up to a whole foot carries over: 11-63/64" can round to 12".
+                if text.parse::<f64>().is_ok_and(|i| i >= 12.0) {
+                    feet += 1.0;
+                    inches = 0.0;
+                    text = if den == 0 { format!("{inches:.p$}") } else { "0".into() };
+                }
+                format!("{feet:.0}' {text}\"")
+            }
+        }
     }
     pub fn dictionary(&self) -> Result<Dict> {
         self.validate()?;
@@ -146,16 +215,41 @@ impl Scale {
             d.set(b"SS".to_vec(), PdfString::text(""));
             Object::Array(vec![Object::Dict(d)])
         };
+        // Lengths in fractions or feet and inches (ISO 32000-2 Table 263: F /F with a
+        // denominator; a compound unit truncates the feet and converts the rest to inches).
+        let length = |factor: f64| -> Object {
+            let fmt = |unit: &str, c: f64, f: &str, den: Option<i64>| {
+                let mut d = Dict::new();
+                d.set(b"Type".to_vec(), Object::name("NumberFormat"));
+                d.set(b"U".to_vec(), PdfString::text(unit));
+                d.set(b"C".to_vec(), Object::Real(c));
+                d.set(b"F".to_vec(), Object::name(f));
+                if let Some(den) = den {
+                    d.set(b"D".to_vec(), Object::Int(den));
+                }
+                d.set(b"FD".to_vec(), Object::Bool(true));
+                d.set(b"SS".to_vec(), PdfString::text(""));
+                Object::Dict(d)
+            };
+            let decimals = (self.precision > 0).then(|| 10_i64.pow(u32::from(self.precision)));
+            let rest = if self.precision == 0 { "R" } else { "D" };
+            match self.format {
+                Format::Decimal => format(&self.unit, factor),
+                Format::Fraction(den) => Object::Array(vec![fmt(&self.unit, factor, "F", Some(i64::from(den)))]),
+                Format::FeetInches(0) => Object::Array(vec![fmt("ft", factor, "T", None), fmt("in", 12.0, rest, decimals)]),
+                Format::FeetInches(den) => Object::Array(vec![fmt("ft", factor, "T", None), fmt("in", 12.0, "F", Some(i64::from(den)))]),
+            }
+        };
         let mut d = Dict::new();
         d.set(b"Type".to_vec(), Object::name("Measure"));
         d.set(b"Subtype".to_vec(), Object::name("RL"));
         d.set(b"R".to_vec(), PdfString::text(&self.ratio));
-        d.set(b"X".to_vec(), format(&self.unit, self.x));
+        d.set(b"X".to_vec(), length(self.x));
         if self.x != self.y {
-            d.set(b"Y".to_vec(), format(&self.unit, self.y));
+            d.set(b"Y".to_vec(), length(self.y));
             d.set(b"CYX".to_vec(), Object::Real(1.0));
         }
-        d.set(b"D".to_vec(), format(&self.unit, self.distance_factor));
+        d.set(b"D".to_vec(), length(self.distance_factor));
         d.set(b"A".to_vec(), format(&self.area_unit, self.area_factor));
         Ok(d)
     }
@@ -167,37 +261,64 @@ impl Scale {
         if d.name(b"Subtype").is_some_and(|n| n != b"RL") {
             return Err(invalid("only rectilinear measurement scales are supported"));
         }
-        let format = |key: &[u8]| -> Result<(String, f64, u8)> {
+        // One number format, or feet then inches (12 in to the ft) for a compound scale.
+        let format = |key: &[u8]| -> Result<(String, f64, u8, Format)> {
             let a = doc.resolve(d.get(key).ok_or_else(|| invalid("measurement scale lacks a number format"))?);
             let a = a.as_array().ok_or_else(|| invalid("invalid measurement number format"))?;
-            if a.len() != 1 {
-                return Err(invalid("compound measurement units are not supported yet"));
-            }
-            let o = doc.resolve(a.first().ok_or_else(|| invalid("empty number format"))?);
-            let f = o.as_dict().ok_or_else(|| invalid("invalid number format dictionary"))?;
-            let precision = match f.name(b"F") {
-                Some(b"R") => 0,
-                None | Some(b"D") => {
-                    let denom = f.int(b"D").unwrap_or(100);
-                    (0..=6).find(|p| 10_i64.pow(*p) == denom).ok_or_else(|| invalid("unsupported measurement precision"))?
-                }
-                _ => return Err(invalid("fractional measurement formats are not supported yet")),
+            let entry = |i: usize| -> Result<Dict> {
+                let o = doc.resolve(a.get(i).ok_or_else(|| invalid("empty number format"))?);
+                o.as_dict().cloned().ok_or_else(|| invalid("invalid number format dictionary"))
             };
-            Ok((text(f, b"U"), f.get(b"C").and_then(Object::as_f64).ok_or_else(|| invalid("missing conversion factor"))?, precision as u8))
+            let decimal = |f: &Dict| -> Result<(u8, Format)> {
+                match f.name(b"F") {
+                    Some(b"R") => Ok((0, Format::Decimal)),
+                    None | Some(b"D") => {
+                        let denom = f.int(b"D").unwrap_or(100);
+                        let p = (0..=6).find(|p| 10_i64.pow(*p) == denom).ok_or_else(|| invalid("unsupported measurement precision"))?;
+                        Ok((p as u8, Format::Decimal))
+                    }
+                    Some(b"F") => {
+                        let den = f.int(b"D").and_then(|d| u16::try_from(d).ok()).filter(|d| valid_denominator(*d));
+                        Ok((2, Format::Fraction(den.ok_or_else(|| invalid("unsupported fraction denominator"))?)))
+                    }
+                    _ => Err(invalid("unsupported measurement number format")),
+                }
+            };
+            let first = entry(0)?;
+            let factor = first.get(b"C").and_then(Object::as_f64).ok_or_else(|| invalid("missing conversion factor"))?;
+            match a.len() {
+                1 => {
+                    let (precision, format) = decimal(&first)?;
+                    Ok((text(&first, b"U"), factor, precision, format))
+                }
+                2 => {
+                    let second = entry(1)?;
+                    let inches = second.get(b"C").and_then(Object::as_f64).is_some_and(|c| (c - 12.0).abs() < 1e-9);
+                    if text(&first, b"U") != "ft" || text(&second, b"U") != "in" || !inches {
+                        return Err(invalid("only feet and inches compound units are supported"));
+                    }
+                    let (precision, format) = match decimal(&second)? {
+                        (_, Format::Fraction(den)) => (2, Format::FeetInches(den)),
+                        (p, _) => (p, Format::FeetInches(0)),
+                    };
+                    Ok(("ft".into(), factor, precision, format))
+                }
+                _ => Err(invalid("compound measurement units are not supported yet")),
+            }
         };
-        let (unit, x, _) = format(b"X")?;
+        let (unit, x, _, _) = format(b"X")?;
         let y = if d.contains(b"Y") {
-            let (_, y, _) = format(b"Y")?;
+            let (_, y, _, _) = format(b"Y")?;
             y * d.get(b"CYX").and_then(Object::as_f64).ok_or_else(|| invalid("Y scale requires CYX for lengths and areas"))?
         } else {
             x
         };
-        let (distance_unit, distance_factor, precision) = format(b"D")?;
+        let (distance_unit, distance_factor, precision, length_format) = format(b"D")?;
         if unit != distance_unit {
             return Err(invalid("different coordinate and distance units are not supported yet"));
         }
-        let (area_unit, area_factor, _) = format(b"A")?;
-        let out = Self { x, y, unit, distance_factor, area_factor, area_unit, precision, ratio: text(d, b"R") };
+        let (area_unit, area_factor, _, _) = format(b"A")?;
+        let out = Self { x, y, unit, distance_factor, area_factor, area_unit, precision, ratio: text(d, b"R"), format: length_format };
         out.validate()?;
         Ok(out)
     }
@@ -256,7 +377,8 @@ pub fn reading(kind: Kind, points: &[Point], scale: &Scale) -> Result<Reading> {
     length *= scale.distance_factor;
     let value = if kind == Kind::Area { area } else { length };
     let unit = if kind == Kind::Area { scale.area_unit.clone() } else { scale.unit.clone() };
-    let label = format!("{value:.precision$} {unit}", precision = usize::from(scale.precision));
+    let label =
+        if kind == Kind::Area { format!("{value:.precision$} {unit}", precision = usize::from(scale.precision)) } else { scale.format_length(value) };
     if !value.is_finite() {
         return Err(invalid("measurement overflows its scale"));
     }

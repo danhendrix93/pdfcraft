@@ -53,6 +53,8 @@ pub enum Section {
 }
 pub struct MeasureView {
     pub section: Section,
+    /// How new scales write lengths (decimal, fractions, feet and inches).
+    pub format: measure::Format,
     /// The viewport (drawing scale) being edited on the current page, by /VP index.
     pub editing: Option<usize>,
     pub line_color: [f64; 3],
@@ -99,6 +101,7 @@ impl Default for MeasureView {
     fn default() -> Self {
         Self {
             section: Section::Takeoff,
+            format: measure::Format::Decimal,
             editing: None,
             line_color: [0.0, 0.47, 0.84],
             line_width: 1.0,
@@ -544,6 +547,58 @@ fn unit_combo(ui: &mut egui::Ui, id: &str, unit: &mut String) -> Option<String> 
     });
     (*unit != before).then_some(before)
 }
+/// Decimal, fractions or feet and inches, plus the fraction size. Returns whether it changed.
+/// Feet and inches switches the unit to ft.
+fn format_combo(ui: &mut egui::Ui, id: &str, state: &mut MeasureView) -> bool {
+    use measure::Format;
+    let before = state.format;
+    let names = [tl!("Decimal"), tl!("Fractions"), tl!("Feet and inches")];
+    let mut chosen: usize = match state.format {
+        Format::Decimal => 0,
+        Format::Fraction(_) => 1,
+        Format::FeetInches(_) => 2,
+    };
+    ui.horizontal(|ui| {
+        ui.label(tl!("Format"));
+        egui::ComboBox::from_id_salt(id).selected_text(names[chosen]).width(120.0).show_ui(ui, |ui| {
+            for (i, name) in names.iter().enumerate() {
+                ui.selectable_value(&mut chosen, i, *name);
+            }
+        });
+    });
+    let mut den = match state.format {
+        Format::Fraction(d) | Format::FeetInches(d) => d,
+        Format::Decimal => 16,
+    };
+    if chosen == 1 && den == 0 {
+        den = 16;
+    }
+    if chosen > 0 {
+        let feet = chosen == 2;
+        let label = |d: u16| if d == 0 { tl!("Decimal inches").to_string() } else { format!("1/{d}") };
+        ui.horizontal(|ui| {
+            ui.label(tl!("Nearest"));
+            egui::ComboBox::from_id_salt(format!("{id}-den")).selected_text(label(den)).width(120.0).show_ui(ui, |ui| {
+                if feet {
+                    ui.selectable_value(&mut den, 0, label(0));
+                }
+                for d in [2u16, 4, 8, 16, 32, 64] {
+                    ui.selectable_value(&mut den, d, label(d));
+                }
+            });
+        });
+    }
+    state.format = match chosen {
+        0 => Format::Decimal,
+        1 => Format::Fraction(den.max(2)),
+        _ => Format::FeetInches(den),
+    };
+    if matches!(state.format, Format::FeetInches(_)) && state.unit != "ft" {
+        let previous = std::mem::replace(&mut state.unit, "ft".into());
+        change_unit(state, &previous);
+    }
+    state.format != before
+}
 /// Keep the scale's meaning when only its unit changes (1 in becomes 25.4 mm).
 fn change_unit(state: &mut MeasureView, previous: &str) {
     if let Some(v) = takeoff::viewport::convert(state.real_distance, previous, &state.unit) {
@@ -593,6 +648,7 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             state.real_distance = reading.value;
             state.unit = scale.unit;
             state.precision = scale.precision;
+            state.format = scale.format;
         }
     }
     let viewports = doc.measurement_viewports(page).unwrap_or_default();
@@ -666,10 +722,17 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 ui.label(tl!("Unit"));
                 if let Some(previous) = unit_combo(ui, "measure-tool-unit", &mut state.unit) {
                     change_unit(state, &previous);
+                    if state.unit != "ft" && matches!(state.format, measure::Format::FeetInches(_)) {
+                        state.format = measure::Format::Decimal;
+                    }
                     state.editing = None;
                     apply = true;
                 }
             });
+            if format_combo(ui, "measure-tool-format", state) {
+                state.editing = None;
+                apply = true;
+            }
             if ui.button(tl!("Change drawing scale")).clicked() {
                 section = Some(Section::Scale);
             }
@@ -698,6 +761,7 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                             state.name = v.name.clone();
                             state.unit = scale.unit.clone();
                             state.precision = scale.precision;
+                            state.format = scale.format;
                             state.drawing_points = 72.0;
                             state.real_distance = 72.0 * scale.x * scale.distance_factor;
                             match &info {
@@ -725,8 +789,12 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 ui.add(egui::DragValue::new(&mut state.real_distance).range(0.000001..=1e12));
                 if let Some(previous) = unit_combo(ui, "measure-scale-unit", &mut state.unit) {
                     change_unit(state, &previous);
+                    if state.unit != "ft" && matches!(state.format, measure::Format::FeetInches(_)) {
+                        state.format = measure::Format::Decimal;
+                    }
                 }
             });
+            format_combo(ui, "measure-scale-format", state);
             ui.add(egui::DragValue::new(&mut state.precision).range(0..=6).prefix(format!("{} ", tl!("Decimals"))));
             if ui.selectable_label(calibrating, tl!("Calibrate from two points")).clicked() {
                 tool = Some(Tool::Calibrate);
@@ -820,6 +888,7 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             });
         match result {
             Ok(mut scale) => {
+                scale.format = state.format;
                 scale.ratio = format!("{} pt = {} {}", trim_number(state.drawing_points), trim_number(state.real_distance), state.unit);
                 let [x, y, w, h] = if state.whole_page { [0.0, 0.0, f64::from(info.width), f64::from(info.height)] } else { state.rect };
                 let a = info.view_to_user(x as f32, y as f32);
