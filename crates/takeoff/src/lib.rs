@@ -12,6 +12,8 @@ use pdfcraft_measure::{Kind, Measurement, Point};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
+pub mod viewport;
+
 /// Item name for measurements saved without a label.
 pub const UNTAGGED: &str = "Untagged";
 /// Unit shown for counts ("number").

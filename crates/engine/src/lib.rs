@@ -289,6 +289,11 @@ impl Document {
         let e = self.editor.as_ref().ok_or("the document can't be read")?;
         Ok(measure::list(&e.cos))
     }
+    /// The page's measurement viewports (drawing scales).
+    pub fn measurement_viewports(&self, page: usize) -> Result<Vec<takeoff::viewport::Viewport>, String> {
+        let e = self.editor.as_ref().ok_or("the document can't be read")?;
+        takeoff::viewport::viewports(&e.cos, page).map_err(|e| e.to_string())
+    }
     /// Saved take-off count markers.
     pub fn counts(&self) -> Result<Vec<takeoff::Count>, String> {
         let e = self.editor.as_ref().ok_or("the document can't be read")?;
@@ -790,6 +795,19 @@ pub enum Edit {
         name: String,
         scale: measure::Scale,
     },
+    /// Replace a page's measurement viewport (drawing scale) by its /VP index.
+    ReplaceMeasurementScale {
+        page: usize,
+        index: usize,
+        bbox: [f64; 4],
+        name: String,
+        scale: measure::Scale,
+    },
+    /// Remove a page's measurement viewport by its /VP index.
+    RemoveMeasurementScale {
+        page: usize,
+        index: usize,
+    },
     /// Add a comment (sticky note, highlight, shape, drawing, text box…).
     AddAnnotation(NewAnnotation),
     /// A custom stamp from a picture file (a PDF page or an image) on `page`. A zero-size
@@ -1138,6 +1156,8 @@ impl Edit {
             Edit::AddCount(c) => format!("Count {}", c.item.trim()),
             Edit::AddTakeoffMeasurement { measurement, .. } => format!("Measure {}", measurement.kind.name()),
             Edit::SetMeasurementScale { .. } => "Set measurement scale".into(),
+            Edit::ReplaceMeasurementScale { .. } => "Change measurement scale".into(),
+            Edit::RemoveMeasurementScale { .. } => "Remove measurement scale".into(),
             Edit::AddAnnotation(a) => format!("Add {}", annotation_noun(&a.shape)),
             Edit::AddCustomStamp { .. } => "Add stamp".into(),
             Edit::DeleteAnnotation { .. } => "Delete comment".into(),
@@ -1293,7 +1313,9 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         | Edit::ResizeAnnotation { .. }
         | Edit::StyleAnnotation { .. }
         | Edit::SetAnnotationInfo { .. }
-        | Edit::SetMeasurementScale { .. } => {
+        | Edit::SetMeasurementScale { .. }
+        | Edit::ReplaceMeasurementScale { .. }
+        | Edit::RemoveMeasurementScale { .. } => {
             if p.annotate() {
                 Ok(())
             } else {
@@ -1490,6 +1512,10 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             takeoff::apply_look(doc, measurement.page, index, look)?;
         }
         Edit::SetMeasurementScale { page, bbox, name, scale } => measure::set_scale(doc, *page, *bbox, name, scale)?,
+        Edit::ReplaceMeasurementScale { page, index, bbox, name, scale } => {
+            takeoff::viewport::replace_viewport(doc, *page, *index, *bbox, name, scale)?
+        }
+        Edit::RemoveMeasurementScale { page, index } => takeoff::viewport::remove_viewport(doc, *page, *index)?,
         Edit::AddAnnotation(a) => {
             pdfcraft_annot::add_annotation(doc, a, &cx.meta())?;
         }

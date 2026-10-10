@@ -53,6 +53,8 @@ pub enum Section {
 }
 pub struct MeasureView {
     pub section: Section,
+    /// The viewport (drawing scale) being edited on the current page, by /VP index.
+    pub editing: Option<usize>,
     pub line_color: [f64; 3],
     pub line_width: f64,
     pub opacity: f64,
@@ -91,6 +93,7 @@ impl Default for MeasureView {
     fn default() -> Self {
         Self {
             section: Section::Takeoff,
+            editing: None,
             line_color: [0.0, 0.47, 0.84],
             line_width: 1.0,
             opacity: 1.0,
@@ -498,6 +501,32 @@ fn snapping(ui: &mut egui::Ui, state: &mut MeasureView) {
     });
 }
 
+/// A dropdown of common units. Returns the previous unit when the choice changed.
+fn unit_combo(ui: &mut egui::Ui, id: &str, unit: &mut String) -> Option<String> {
+    let before = unit.clone();
+    egui::ComboBox::from_id_salt(id).selected_text(unit.as_str()).width(70.0).show_ui(ui, |ui| {
+        for (u, _) in takeoff::viewport::UNITS {
+            ui.selectable_value(unit, u.to_string(), u);
+        }
+    });
+    (*unit != before).then_some(before)
+}
+/// Keep the scale's meaning when only its unit changes (1 in becomes 25.4 mm).
+fn change_unit(state: &mut MeasureView, previous: &str) {
+    if let Some(v) = takeoff::viewport::convert(state.real_distance, previous, &state.unit) {
+        state.real_distance = v;
+    }
+}
+/// The whole page in PDF user space.
+fn page_bbox(info: &pdfcraft_render::PageInfo) -> [f64; 4] {
+    let a = info.view_to_user(0.0, 0.0);
+    let b = info.view_to_user(info.width, info.height);
+    [f64::from(a[0].min(b[0])), f64::from(a[1].min(b[1])), f64::from(a[0].max(b[0])), f64::from(a[1].max(b[1]))]
+}
+fn same_box(a: [f64; 4], b: [f64; 4]) -> bool {
+    a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.5)
+}
+
 pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     egui::ScrollArea::vertical().id_salt("measure-panel").auto_shrink([false, false]).show(ui, |ui| panel_body(app, ui, t));
 }
@@ -533,6 +562,11 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             state.precision = scale.precision;
         }
     }
+    let viewports = doc.measurement_viewports(page).unwrap_or_default();
+    if state.editing.is_some_and(|i| i >= viewports.len()) {
+        state.editing = None;
+    }
+    let mut remove = None;
     let items = match state.takeoff.as_ref().map(|(_, l)| l) {
         Some(Ok(lines)) => takeoff::items(lines),
         _ => Vec::new(),
@@ -584,6 +618,14 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             if let Ok(scale) = doc.measurement_scale(page, at) {
                 ui.label(egui::RichText::new(format!("{}: {}", tl!("Scale"), scale.ratio)).color(t.text_muted));
             }
+            ui.horizontal(|ui| {
+                ui.label(tl!("Unit"));
+                if let Some(previous) = unit_combo(ui, "measure-tool-unit", &mut state.unit) {
+                    change_unit(state, &previous);
+                    state.editing = None;
+                    apply = true;
+                }
+            });
             if ui.button(tl!("Change drawing scale")).clicked() {
                 section = Some(Section::Scale);
             }
@@ -594,16 +636,54 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 egui::RichText::new(tl!("Set the scale before measuring. Saved measurements keep the scale they were drawn with."))
                     .color(t.text_muted),
             );
+            if !viewports.is_empty() {
+                heading(ui, t, tl!("Scales on this page"));
+                for v in &viewports {
+                    ui.horizontal_wrapped(|ui| {
+                        let ratio = match &v.scale {
+                            Ok(scale) => scale.ratio.clone(),
+                            Err(e) => e.clone(),
+                        };
+                        let name = if v.name.is_empty() { tl!("Drawing scale").to_string() } else { v.name.clone() };
+                        ui.label(egui::RichText::new(name).strong());
+                        ui.label(egui::RichText::new(ratio).color(t.text_muted));
+                        if let Ok(scale) = &v.scale
+                            && ui.selectable_label(state.editing == Some(v.index), tl!("Edit")).clicked()
+                        {
+                            state.editing = Some(v.index);
+                            state.name = v.name.clone();
+                            state.unit = scale.unit.clone();
+                            state.precision = scale.precision;
+                            state.drawing_points = 72.0;
+                            state.real_distance = 72.0 * scale.x * scale.distance_factor;
+                            match &info {
+                                Some(info) if !same_box(v.bbox, page_bbox(info)) => {
+                                    state.whole_page = false;
+                                    let a = info.user_to_view(v.bbox[0] as f32, v.bbox[1] as f32);
+                                    let b = info.user_to_view(v.bbox[2] as f32, v.bbox[3] as f32);
+                                    let (x, y) = (f64::from(a[0].min(b[0])), f64::from(a[1].min(b[1])));
+                                    state.rect = [x, y, f64::from(a[0].max(b[0])) - x, f64::from(a[1].max(b[1])) - y];
+                                }
+                                _ => state.whole_page = true,
+                            }
+                        }
+                        if ui.add_enabled(doc.allows_annotation(), egui::Button::new(tl!("Remove"))).clicked() {
+                            remove = Some(v.index);
+                        }
+                    });
+                }
+                ui.separator();
+            }
+            heading(ui, t, if state.editing.is_some() { tl!("Edit scale") } else { tl!("New scale") });
             ui.horizontal(|ui| {
                 ui.add(egui::DragValue::new(&mut state.drawing_points).range(0.000001..=1e9).prefix("pt "));
                 ui.label("=");
                 ui.add(egui::DragValue::new(&mut state.real_distance).range(0.000001..=1e12));
+                if let Some(previous) = unit_combo(ui, "measure-scale-unit", &mut state.unit) {
+                    change_unit(state, &previous);
+                }
             });
-            ui.horizontal(|ui| {
-                ui.label(tl!("Unit"));
-                ui.add(egui::TextEdit::singleline(&mut state.unit).desired_width(64.0).char_limit(12));
-                ui.add(egui::DragValue::new(&mut state.precision).range(0..=6).prefix(format!("{} ", tl!("Decimals"))));
-            });
+            ui.add(egui::DragValue::new(&mut state.precision).range(0..=6).prefix(format!("{} ", tl!("Decimals"))));
             if ui.selectable_label(calibrating, tl!("Calibrate from two points")).clicked() {
                 tool = Some(Tool::Calibrate);
             }
@@ -623,7 +703,13 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 ui.label(tl!("Viewport"));
                 ui.add(egui::TextEdit::singleline(&mut state.name).desired_width(130.0).char_limit(128));
             });
-            apply = ui.add_enabled(doc.allows_annotation(), egui::Button::new(tl!("Apply scale"))).clicked();
+            ui.horizontal(|ui| {
+                let label = if state.editing.is_some() { tl!("Update scale") } else { tl!("Apply scale") };
+                apply = ui.add_enabled(doc.allows_annotation(), egui::Button::new(label)).clicked();
+                if state.editing.is_some() && ui.button(tl!("Cancel")).clicked() {
+                    state.editing = None;
+                }
+            });
         }
         None => {
             ui.label(egui::RichText::new(tl!("Take-off")).font(crate::theme::semibold(15.0)).color(t.text));
@@ -689,19 +775,28 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 Scale::calibrate(a, b, state.real_distance / state.drawing_points, &state.unit, state.precision).map_err(|e| e.to_string())
             });
         match result {
-            Ok(scale) => {
+            Ok(mut scale) => {
+                scale.ratio = format!("{} pt = {} {}", trim_number(state.drawing_points), trim_number(state.real_distance), state.unit);
                 let [x, y, w, h] = if state.whole_page { [0.0, 0.0, f64::from(info.width), f64::from(info.height)] } else { state.rect };
                 let a = info.view_to_user(x as f32, y as f32);
                 let b = info.view_to_user((x + w) as f32, (y + h) as f32);
-                app.views[index].pending_edit = Some(Edit::SetMeasurementScale {
-                    page,
-                    bbox: [f64::from(a[0].min(b[0])), f64::from(a[1].min(b[1])), f64::from(a[0].max(b[0])), f64::from(a[1].max(b[1]))],
-                    name: state.name.clone(),
-                    scale,
+                let bbox = [f64::from(a[0].min(b[0])), f64::from(a[1].min(b[1])), f64::from(a[0].max(b[0])), f64::from(a[1].max(b[1]))];
+                // Editing replaces that viewport; a whole-page scale replaces the page's
+                // existing whole-page one rather than stacking another on top.
+                let target = state.editing.or_else(|| viewports.iter().rev().find(|v| same_box(v.bbox, bbox)).map(|v| v.index));
+                let name = state.name.clone();
+                state.editing = None;
+                app.views[index].pending_edit = Some(match target {
+                    Some(i) => Edit::ReplaceMeasurementScale { page, index: i, bbox, name, scale },
+                    None => Edit::SetMeasurementScale { page, bbox, name, scale },
                 });
             }
             Err(e) => state.error = Some(e.to_string()),
         }
+    }
+    if let Some(i) = remove {
+        app.views[index].measure.editing = None;
+        app.views[index].pending_edit = Some(Edit::RemoveMeasurementScale { page, index: i });
     }
     if section.is_some() {
         app.quick_tool = QuickTool::Select;
@@ -723,6 +818,11 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if export_takeoff {
         export_takeoff_csv(app);
     }
+}
+/// A number without trailing zeros ("72", "0.5").
+fn trim_number(v: f64) -> String {
+    let s = format!("{v:.6}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 fn takeoff_lines(doc: &Document) -> Result<Vec<takeoff::Line>, String> {
     Ok(takeoff::summarise(&doc.measurements()?.measurements, &doc.counts()?))
