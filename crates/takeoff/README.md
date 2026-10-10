@@ -10,4 +10,6 @@ Saved measurements belong to the item their label names. `summarise` totals coun
 
 In the desktop app a floating toolbar above the page holds Distance, Perimeter, Area, Count, Drawing scale and Take-off summary. Picking a tool switches the left panel to that tool's options: the item (with quick picks of items already in the document), line or marker style, label style, snapping and the current scale. Automation provides `takeoff_count`, `takeoff_counts`, `takeoff_summary` and `takeoff_export`.
 
-Not yet supported: numbers drawn on the markers themselves, volumes, and conversion between units.
+Area measurements can carry a depth in `/PCTakeoffDepth [start end]`; `volumes` multiplies each area by its average depth, and the summary totals them per item. `viewport` lists, replaces and removes a page's drawing scales and converts between common units (mm, cm, m, km, in, ft, yd).
+
+Not yet supported: numbers drawn on the markers themselves.
