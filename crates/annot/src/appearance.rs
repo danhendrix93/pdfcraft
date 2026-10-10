@@ -713,9 +713,9 @@ pub fn build(d: &Dict) -> Option<Stream> {
     if let Some(value) = d.get(b"PCMeasureValue").and_then(Object::as_string) {
         let value = value.to_text();
         if value.chars().count() <= 256 && matches!(subtype.as_slice(), b"Line" | b"PolyLine" | b"Polygon") {
-            let size = 10.0;
+            let size = d.get(b"PCMeasureCaptionSize").and_then(Object::as_f64).filter(|s| s.is_finite()).map_or(10.0, |s| s.clamp(4.0, 72.0));
             let x = (rect[0] + rect[2] - text_width(&value, size)) * 0.5;
-            let y = rect[3] - 12.0;
+            let y = rect[3] - size - 2.0;
             let col = stroke.unwrap_or([0.0, 0.47, 0.84]);
             out.extend(format!("{}BT /Helv {} Tf {} {} Td ", rg(col), n(size), n(x), n(y)).bytes());
             // WinAnsi bytes (e.g. 0xB2 for "²") go into the stream as-is, not through UTF-8.

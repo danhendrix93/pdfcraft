@@ -25,7 +25,7 @@ fn blank(pages: usize) -> Document {
     Document::open(Arc::new(bytes)).unwrap()
 }
 fn count(page: usize, at: Point, item: &str) -> NewCount {
-    NewCount { page, at, item: item.into(), color: [0.9, 0.1, 0.1], author: "A".into() }
+    NewCount { page, at, item: item.into(), color: [0.9, 0.1, 0.1], size: MARKER_SIZE, author: "A".into() }
 }
 fn meta() -> Meta {
     Meta { date: None, id: "count".into() }

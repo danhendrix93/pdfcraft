@@ -6,6 +6,8 @@ Count markers are small filled circle (Circle) annotations centred on the symbol
 
 Saved measurements belong to the item their label names. `summarise` totals counts (unit `nr`), lengths (distances and perimeters together) and areas per item and unit. Item names match case-insensitively and ignore surrounding spaces; blank labels are grouped as `Untagged`. One item measured in different units stays on separate lines rather than being converted. `csv` writes the summary as spreadsheet-safe CSV.
 
-The desktop Measure panel has a Count tool (its Label field names the item) and a take-off table with CSV export. Automation provides `takeoff_count`, `takeoff_counts`, `takeoff_summary` and `takeoff_export`.
+`apply_look` adds take-off styling to a saved measurement: dashed lines and a caption showing the value, the item and value, or nothing, at a chosen text size (`/PCMeasureCaptionSize`). Count markers take a colour and size.
+
+In the desktop app a floating toolbar above the page holds Distance, Perimeter, Area, Count, Drawing scale and Take-off summary. Picking a tool switches the left panel to that tool's options: the item (with quick picks of items already in the document), line or marker style, label style, snapping and the current scale. Automation provides `takeoff_count`, `takeoff_counts`, `takeoff_summary` and `takeoff_export`.
 
 Not yet supported: numbers drawn on the markers themselves, volumes, and conversion between units.

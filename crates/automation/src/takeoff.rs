@@ -14,6 +14,7 @@ impl Automation {
             at,
             item: a.str("item")?.into(),
             color,
+            size: a.opt_num("size")?.unwrap_or(takeoff::MARKER_SIZE),
             author: a.opt_str("author")?.unwrap_or(super::comments::DEFAULT_AUTHOR).into(),
         });
         self.apply(a, edit)

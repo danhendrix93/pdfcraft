@@ -78,6 +78,8 @@ pub struct NewCount {
     pub at: Point,
     pub item: String,
     pub color: pdfcraft_annot::Rgb,
+    /// Marker diameter in user-space points (clamped to 4..=48; [`MARKER_SIZE`] by default).
+    pub size: f64,
     pub author: String,
 }
 
@@ -110,7 +112,8 @@ pub fn add_count(doc: &mut Document, new: &NewCount, meta: &Meta) -> Result<(usi
     let item = new.item.trim();
     let number = counts(doc).iter().filter(|c| same_item(&c.item, item)).map(|c| c.number).max().unwrap_or(0).saturating_add(1);
     let contents = format!("{item} #{number}");
-    let r = MARKER_SIZE / 2.0;
+    let size = if new.size.is_finite() { new.size.clamp(4.0, 48.0) } else { MARKER_SIZE };
+    let r = size / 2.0;
     let [x, y] = new.at;
     let index = pdfcraft_annot::add_annotation(
         doc,
@@ -168,6 +171,84 @@ pub fn counts(doc: &Document) -> Vec<Count> {
             let number = d.int(NUMBER_KEY).and_then(|n| u32::try_from(n).ok()).unwrap_or(0);
             let id = d.get(b"NM").and_then(Object::as_string).map(PdfString::to_text).unwrap_or_default();
             out.push(Count { page, index, id, item, number, at });
+        }
+    }
+    out
+}
+
+/// What a measurement's caption shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Caption {
+    /// "12.30 m".
+    #[default]
+    Value,
+    /// "Kerb: 12.30 m" (the value alone when there is no item).
+    ItemAndValue,
+    /// No caption on the page; the value is still listed and totalled.
+    Hidden,
+}
+
+/// Line and label styling applied to a saved measurement beyond its colour and width.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Look {
+    pub dashed: bool,
+    pub caption: Caption,
+    /// Caption text size in points (clamped to 4..=72).
+    pub caption_size: f64,
+}
+impl Default for Look {
+    fn default() -> Self {
+        Self { dashed: false, caption: Caption::Value, caption_size: 10.0 }
+    }
+}
+
+/// Apply `look` to the measurement annotation at `index` on `page` (just added by
+/// `pdfcraft_measure::add`) and regenerate its appearance.
+pub fn apply_look(doc: &mut Document, page: usize, index: usize, look: &Look) -> Result<()> {
+    if *look == Look::default() {
+        return Ok(());
+    }
+    let (obj, mut d) = annotation(doc, page, index)?;
+    if look.dashed {
+        let mut bs = d.get(b"BS").and_then(Object::as_dict).cloned().unwrap_or_default();
+        if !bs.contains(b"W") {
+            bs.set(b"W".to_vec(), Object::Real(1.0));
+        }
+        bs.set(b"S".to_vec(), Object::name("D"));
+        bs.set(b"D".to_vec(), Object::Array(vec![Object::Real(4.0), Object::Real(3.0)]));
+        d.set(b"BS".to_vec(), Object::Dict(bs));
+    }
+    let value = d.get(b"PCMeasureValue").and_then(Object::as_string).map(PdfString::to_text).unwrap_or_default();
+    let item = d.get(b"PCMeasureLabel").and_then(Object::as_string).map(PdfString::to_text).unwrap_or_default();
+    let caption = match look.caption {
+        Caption::Value => value,
+        Caption::ItemAndValue if item.trim().is_empty() => value,
+        Caption::ItemAndValue => format!("{}: {value}", item.trim()),
+        Caption::Hidden => String::new(),
+    };
+    d.set(b"PCMeasureValue".to_vec(), PdfString::text(&caption));
+    let size = if look.caption_size.is_finite() { look.caption_size.clamp(4.0, 72.0) } else { 10.0 };
+    d.set(b"PCMeasureCaptionSize".to_vec(), Object::Real(size));
+    // Room for a wider or taller caption above the geometry (add() reserved 16 pt for 10 pt text).
+    if let Some(v) = d.get(b"Rect").and_then(Object::as_array).and_then(|a| a.iter().map(Object::as_f64).collect::<Option<Vec<f64>>>())
+        && let [x0, y0, x1, y1] = v.as_slice()
+    {
+        let width = (caption.chars().count() as f64 * size * 0.6).max(40.0);
+        let cx = (x0 + x1) * 0.5;
+        let rect = [x0.min(cx - width / 2.0), *y0, x1.max(cx + width / 2.0), y1 + (size - 10.0).max(0.0)];
+        d.set(b"Rect".to_vec(), Object::Array(rect.into_iter().map(Object::Real).collect()));
+    }
+    doc.update_dict(obj, |target| *target = d).map_err(|e| invalid(&e.to_string()))?;
+    pdfcraft_annot::set_appearance(doc, obj)?;
+    Ok(())
+}
+
+/// Item names already used in the document, first spelling of each, sorted case-insensitively.
+pub fn items(lines: &[Line]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for l in lines {
+        if l.item != UNTAGGED && !out.iter().any(|i| i.eq_ignore_ascii_case(&l.item)) {
+            out.push(l.item.clone());
         }
     }
     out

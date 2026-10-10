@@ -166,6 +166,7 @@ fn scope_of(edit: &Edit) -> Scope {
         Edit::AddAnnotation(a) if matches!(a.shape, Shape::Attachment { .. }) => Scope::Full,
         Edit::AddMeasurement(_)
         | Edit::AddCount(_)
+        | Edit::AddTakeoffMeasurement { .. }
         | Edit::AddAnnotation(_)
         | Edit::AddCustomStamp { .. }
         | Edit::DeleteAnnotation { .. }
@@ -777,6 +778,11 @@ pub enum Edit {
     AddMeasurement(measure::NewMeasurement),
     /// Add a numbered take-off count marker.
     AddCount(takeoff::NewCount),
+    /// Add a measurement with take-off line and label styling.
+    AddTakeoffMeasurement {
+        measurement: measure::NewMeasurement,
+        look: takeoff::Look,
+    },
     /// Store a drawing scale for a rectangular viewport (PDF user space).
     SetMeasurementScale {
         page: usize,
@@ -1130,6 +1136,7 @@ impl Edit {
             Edit::NumberPages { .. } => "Number pages".into(),
             Edit::AddMeasurement(m) => format!("Measure {}", m.kind.name()),
             Edit::AddCount(c) => format!("Count {}", c.item.trim()),
+            Edit::AddTakeoffMeasurement { measurement, .. } => format!("Measure {}", measurement.kind.name()),
             Edit::SetMeasurementScale { .. } => "Set measurement scale".into(),
             Edit::AddAnnotation(a) => format!("Add {}", annotation_noun(&a.shape)),
             Edit::AddCustomStamp { .. } => "Add stamp".into(),
@@ -1271,6 +1278,7 @@ fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), Ed
         }
         Edit::AddMeasurement(_)
         | Edit::AddCount(_)
+        | Edit::AddTakeoffMeasurement { .. }
         | Edit::AddAnnotation(_)
         | Edit::AddCustomStamp { .. }
         | Edit::DeleteAnnotation { .. }
@@ -1476,6 +1484,10 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         }
         Edit::AddCount(c) => {
             takeoff::add_count(doc, c, &cx.meta())?;
+        }
+        Edit::AddTakeoffMeasurement { measurement, look } => {
+            let index = measure::add(doc, measurement, &cx.meta())?;
+            takeoff::apply_look(doc, measurement.page, index, look)?;
         }
         Edit::SetMeasurementScale { page, bbox, name, scale } => measure::set_scale(doc, *page, *bbox, name, scale)?,
         Edit::AddAnnotation(a) => {

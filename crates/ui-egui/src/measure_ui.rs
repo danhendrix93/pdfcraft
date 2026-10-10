@@ -1,5 +1,5 @@
 //! Measure objects: page-space clicks, live readings and persistent drawing scales.
-use crate::{LeftPanel, PdfCraftApp, QuickTool, canvas::DocView, theme::Tokens};
+use crate::{LeftPanel, PdfCraftApp, QuickTool, canvas::DocView, icons, theme::Tokens};
 use egui::{Color32, Pos2, Stroke};
 use pdfcraft_engine::{
     Document, Edit, Style,
@@ -44,7 +44,23 @@ impl Tool {
         }
     }
 }
+/// What the Measure panel shows when no measuring tool is active.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Section {
+    #[default]
+    Takeoff,
+    Scale,
+}
 pub struct MeasureView {
+    pub section: Section,
+    pub line_color: [f64; 3],
+    pub line_width: f64,
+    pub opacity: f64,
+    pub dashed: bool,
+    pub caption: takeoff::Caption,
+    pub caption_size: f64,
+    pub count_color: [f64; 3],
+    pub count_size: f64,
     pub points: Vec<Point>,
     pub page: Option<usize>,
     pub tool: Option<Tool>,
@@ -74,6 +90,15 @@ pub struct MeasureView {
 impl Default for MeasureView {
     fn default() -> Self {
         Self {
+            section: Section::Takeoff,
+            line_color: [0.0, 0.47, 0.84],
+            line_width: 1.0,
+            opacity: 1.0,
+            dashed: false,
+            caption: takeoff::Caption::Value,
+            caption_size: 10.0,
+            count_color: [0.89, 0.13, 0.13],
+            count_size: takeoff::MARKER_SIZE,
             points: Vec::new(),
             page: None,
             tool: None,
@@ -179,7 +204,8 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, doc: &Document, v
                         page,
                         at: point,
                         item: state.label.clone(),
-                        color: [0.89, 0.13, 0.13],
+                        color: state.count_color,
+                        size: state.count_size,
                         author: author.clone(),
                     }));
                 }
@@ -238,7 +264,8 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, doc: &Document, v
             }
         }
         let positions: Vec<Pos2> = points.iter().map(|&p| screen(p)).collect();
-        let stroke = Stroke::new(1.5, Color32::from_rgb(0, 120, 214));
+        let [r, g, b] = state.line_color.map(|c| (c.clamp(0.0, 1.0) * 255.0) as u8);
+        let stroke = Stroke::new(1.5, Color32::from_rgb(r, g, b));
         for pair in positions.windows(2) {
             if let [a, b] = pair {
                 ui.painter().line_segment([*a, *b], stroke);
@@ -290,18 +317,187 @@ fn finish(state: &mut MeasureView, pending: &mut Option<Edit>, doc: &Document, p
         return;
     }
     if let Some(scale) = state.scale.clone() {
-        *pending = Some(Edit::AddMeasurement(NewMeasurement {
+        let measurement = NewMeasurement {
             page,
             kind: tool.kind(),
             points: state.points.clone(),
             scale,
-            style: Style { color: [0.0, 0.47, 0.84], ..Style::default() },
+            style: Style { color: state.line_color, width: state.line_width, opacity: state.opacity, ..Style::default() },
             label: state.label.clone(),
             author: author.into(),
-        }));
+        };
+        let look = takeoff::Look { dashed: state.dashed, caption: state.caption, caption_size: state.caption_size };
+        *pending = Some(if look == takeoff::Look::default() {
+            Edit::AddMeasurement(measurement)
+        } else {
+            Edit::AddTakeoffMeasurement { measurement, look }
+        });
         state.cancel();
     }
 }
+/// Measure and take-off tools on the toolbar: (icon, tooltip, tool).
+const TOOLBAR: [(&str, &str, Tool); 4] = [
+    ("ruler", "Distance", Tool::Distance),
+    ("spline", "Perimeter", Tool::Perimeter),
+    ("pentagon", "Area", Tool::Area),
+    ("hash", "Count", Tool::Count),
+];
+/// Swatches offered for lines and count markers.
+const COLOURS: [[f64; 3]; 8] = [
+    [0.0, 0.47, 0.84],
+    [0.89, 0.13, 0.13],
+    [0.18, 0.62, 0.36],
+    [1.0, 0.54, 0.0],
+    [0.54, 0.25, 0.82],
+    [1.0, 0.37, 0.64],
+    [0.95, 0.8, 0.0],
+    [0.1, 0.1, 0.1],
+];
+
+fn open_tool(app: &mut PdfCraftApp, tool: Option<Tool>, section: Section) {
+    app.left = LeftPanel::Tool("measure");
+    app.left_open = true;
+    if let Some((index, _)) = app.active_ids() {
+        let state = &mut app.views[index].measure;
+        state.cancel();
+        state.section = section;
+        state.error = None;
+    }
+    app.quick_tool = match tool {
+        Some(tool) => QuickTool::Measure(tool),
+        None => QuickTool::Select,
+    };
+}
+
+/// The floating measure and take-off toolbar at the top of the document area.
+pub(crate) fn toolbar(app: &mut PdfCraftApp, area: egui::Rect, ui: &mut egui::Ui) {
+    let Some((index, _)) = app.active_ids() else { return };
+    let t = Tokens::get(ui.ctx());
+    let panel_open = app.left_open && app.left == LeftPanel::Tool("measure");
+    let active = match app.quick_tool {
+        QuickTool::Measure(tool) if tool != Tool::Calibrate => Some(tool),
+        _ => None,
+    };
+    let section = app.views[index].measure.section;
+    let mut pick: Option<(Option<Tool>, Section)> = None;
+    let pos = egui::pos2(area.center().x, area.top() + 14.0);
+    egui::Area::new(egui::Id::new("measure-bar")).order(egui::Order::Middle).pivot(egui::Align2::CENTER_TOP).fixed_pos(pos).show(ui.ctx(), |ui| {
+        egui::Frame::NONE
+            .fill(t.card)
+            .stroke(Stroke::new(1.0, t.border))
+            .corner_radius(egui::CornerRadius::same(10))
+            .shadow(egui::Shadow { offset: [0, 2], blur: 10, spread: 0, color: Color32::from_black_alpha(if t.dark() { 80 } else { 22 }) })
+            .inner_margin(egui::Margin::same(4))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for (icon, label, tool) in TOOLBAR {
+                        let on = active == Some(tool);
+                        if icons::button(ui, icon, 32.0, on, tl!(label)).clicked() {
+                            // A second click on the active tool puts it down.
+                            pick = Some(if on { (None, Section::Takeoff) } else { (Some(tool), section) });
+                        }
+                    }
+                    ui.separator();
+                    let scale_on = panel_open && active.is_none() && section == Section::Scale;
+                    if icons::button(ui, "sliders-horizontal", 32.0, scale_on, tl!("Drawing scale")).clicked() {
+                        pick = Some((None, Section::Scale));
+                    }
+                    let takeoff_on = panel_open && active.is_none() && section == Section::Takeoff;
+                    if icons::button(ui, "file-spreadsheet", 32.0, takeoff_on, tl!("Take-off summary")).clicked() {
+                        pick = Some((None, Section::Takeoff));
+                    }
+                });
+            });
+    });
+    if let Some((tool, section)) = pick {
+        open_tool(app, tool, section);
+    }
+}
+
+fn heading(ui: &mut egui::Ui, t: &Tokens, text: &str) {
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new(text).font(crate::theme::semibold(13.0)).color(t.text));
+}
+fn swatches(ui: &mut egui::Ui, t: &Tokens, colour: &mut [f64; 3]) {
+    ui.horizontal_wrapped(|ui| {
+        for c in COLOURS {
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+            let fill = Color32::from_rgb((c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8);
+            ui.painter().circle_filled(rect.center(), 8.0, fill);
+            if *colour == c {
+                ui.painter().circle_stroke(rect.center(), 10.0, Stroke::new(2.0, t.accent));
+            }
+            if resp.clicked() {
+                *colour = c;
+            }
+        }
+    });
+}
+fn item_box(ui: &mut egui::Ui, t: &Tokens, state: &mut MeasureView, items: &[String]) {
+    heading(ui, t, tl!("Item"));
+    egui::Frame::NONE.fill(t.field).stroke(Stroke::new(1.0, t.border)).corner_radius(4).inner_margin(egui::Margin::symmetric(6, 4)).show(ui, |ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut state.label)
+                .hint_text(tl!("e.g. Gully, Kerb, 150mm pipe"))
+                .frame(egui::Frame::NONE)
+                .desired_width(f32::INFINITY)
+                .char_limit(128),
+        );
+    });
+    if !items.is_empty() {
+        ui.label(egui::RichText::new(tl!("Items in this document")).color(t.text_muted));
+        ui.horizontal_wrapped(|ui| {
+            for item in items {
+                let on = state.label.trim().eq_ignore_ascii_case(item);
+                if ui.selectable_label(on, item.as_str()).clicked() {
+                    state.label = item.clone();
+                }
+            }
+        });
+    }
+}
+fn line_style(ui: &mut egui::Ui, t: &Tokens, state: &mut MeasureView) {
+    heading(ui, t, tl!("Line style"));
+    swatches(ui, t, &mut state.line_color);
+    ui.add(egui::Slider::new(&mut state.line_width, 0.5..=6.0).step_by(0.5).text(tl!("Width")));
+    ui.add(egui::Slider::new(&mut state.opacity, 0.1..=1.0).text(tl!("Opacity")));
+    ui.horizontal(|ui| {
+        ui.selectable_value(&mut state.dashed, false, tl!("Solid"));
+        ui.selectable_value(&mut state.dashed, true, tl!("Dashed"));
+    });
+}
+fn label_style(ui: &mut egui::Ui, t: &Tokens, state: &mut MeasureView) {
+    heading(ui, t, tl!("Label style"));
+    ui.horizontal_wrapped(|ui| {
+        ui.selectable_value(&mut state.caption, takeoff::Caption::Value, tl!("Value"));
+        ui.selectable_value(&mut state.caption, takeoff::Caption::ItemAndValue, tl!("Item and value"));
+        ui.selectable_value(&mut state.caption, takeoff::Caption::Hidden, tl!("None"));
+    });
+    if state.caption != takeoff::Caption::Hidden {
+        ui.add(egui::Slider::new(&mut state.caption_size, 6.0..=36.0).step_by(1.0).text(tl!("Text size")));
+    }
+}
+fn count_style(ui: &mut egui::Ui, t: &Tokens, state: &mut MeasureView) {
+    heading(ui, t, tl!("Marker style"));
+    swatches(ui, t, &mut state.count_color);
+    ui.add(egui::Slider::new(&mut state.count_size, 4.0..=48.0).step_by(1.0).text(tl!("Size")));
+}
+fn snapping(ui: &mut egui::Ui, state: &mut MeasureView) {
+    egui::CollapsingHeader::new(tl!("Snapping")).id_salt("measure-snapping").show(ui, |ui| {
+        ui.checkbox(&mut state.snap_enabled, tl!("Snap to drawing"));
+        if state.snap_enabled {
+            ui.horizontal_wrapped(|ui| {
+                ui.checkbox(&mut state.snaps.endpoints, tl!("Endpoints"));
+                ui.checkbox(&mut state.snaps.midpoints, tl!("Midpoints"));
+                ui.checkbox(&mut state.snaps.intersections, tl!("Intersections"));
+                ui.checkbox(&mut state.snaps.paths, tl!("Paths"));
+            });
+            ui.add(egui::Slider::new(&mut state.sensitivity, 1.0..=20.0).text(tl!("Sensitivity")));
+        }
+    });
+}
+
 pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     egui::ScrollArea::vertical().id_salt("measure-panel").auto_shrink([false, false]).show(ui, |ui| panel_body(app, ui, t));
 }
@@ -310,15 +506,11 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         ui.label(tl!("Open a PDF to measure it."));
         return;
     };
-    let mut tool = None;
-    // Wrap rather than widen the panel's content past its edge.
-    ui.horizontal_wrapped(|ui| {
-        for (label, value) in [("Distance", Tool::Distance), ("Perimeter", Tool::Perimeter), ("Area", Tool::Area), ("Count", Tool::Count)] {
-            if ui.selectable_label(app.quick_tool == QuickTool::Measure(value), tl!(label)).clicked() {
-                tool = Some(value);
-            }
-        }
-    });
+    let active = match app.quick_tool {
+        QuickTool::Measure(tool) if tool != Tool::Calibrate => Some(tool),
+        _ => None,
+    };
+    let calibrating = app.quick_tool == QuickTool::Measure(Tool::Calibrate);
     let Some(doc) = app.session.get(id) else { return };
     let page = app.views[index].current;
     let info = doc.info.pages.get(page).cloned();
@@ -341,125 +533,156 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             state.precision = scale.precision;
         }
     }
-    ui.add_space(4.0);
-    ui.label(egui::RichText::new(tl!("Item (label for measurements and counts)")).color(t.text_muted));
-    egui::Frame::NONE.fill(t.field).stroke(Stroke::new(1.0, t.border)).corner_radius(4).inner_margin(egui::Margin::symmetric(6, 4)).show(ui, |ui| {
-        ui.add(
-            egui::TextEdit::singleline(&mut state.label)
-                .hint_text(tl!("e.g. Gully, Kerb, 150mm pipe"))
-                .frame(egui::Frame::NONE)
-                .desired_width(f32::INFINITY)
-                .char_limit(128),
-        );
-    });
-    ui.add_space(4.0);
-    ui.label(tl!("Click vertices. Enter or double-click finishes a perimeter or area. Click the first point to close an area."));
-    ui.label(tl!("Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels."));
-    ui.label(tl!("Count places a numbered marker per click. Type the item above first."));
-    ui.separator();
-    ui.label(tl!("Measurement information"));
-    if let Some(reading) = &state.reading {
-        ui.label(egui::RichText::new(&reading.label).strong());
-        ui.label(format!("X: {:.3}   Y: {:.3}", reading.delta_x, reading.delta_y));
-        ui.label(format!("{}: {:.2}°", tl!("Angle"), reading.angle));
-        if let Some(scale) = &state.scale {
-            ui.label(&scale.ratio);
-        }
-    } else {
-        ui.label(tl!("Click the first point to begin."));
-    }
-    ui.separator();
-    ui.checkbox(&mut state.snap_enabled, tl!("Snap to drawing"));
-    if state.snap_enabled {
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut state.snaps.endpoints, tl!("Endpoints"));
-            ui.checkbox(&mut state.snaps.midpoints, tl!("Midpoints"));
-        });
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut state.snaps.intersections, tl!("Intersections"));
-            ui.checkbox(&mut state.snaps.paths, tl!("Paths"));
-        });
-        ui.add(egui::Slider::new(&mut state.sensitivity, 1.0..=20.0).text(tl!("Sensitivity")));
-    }
-    ui.separator();
-    ui.label(tl!("Drawing scale"));
-    ui.horizontal(|ui| {
-        ui.add(egui::DragValue::new(&mut state.drawing_points).range(0.000001..=1e9).prefix("pt "));
-        ui.label("=");
-        ui.add(egui::DragValue::new(&mut state.real_distance).range(0.000001..=1e12));
-    });
-    ui.horizontal(|ui| {
-        ui.label(tl!("Unit"));
-        ui.add(egui::TextEdit::singleline(&mut state.unit).desired_width(64.0).char_limit(12));
-        ui.add(egui::DragValue::new(&mut state.precision).range(0..=6).prefix(format!("{} ", tl!("Decimals"))));
-    });
-    if ui.button(tl!("Calibrate from two points")).clicked() {
-        tool = Some(Tool::Calibrate);
-    }
-    ui.checkbox(&mut state.whole_page, tl!("Entire page"));
-    if !state.whole_page {
-        ui.label(tl!("Viewport rectangle in page points (x, y, width, height)"));
-        for (i, name) in ["X", "Y", "Width", "Height"].iter().enumerate() {
-            if let Some(v) = state.rect.get_mut(i) {
-                ui.add(egui::DragValue::new(v).range(0.0..=1e9).prefix(format!("{}: ", tl!(name))));
+    let items = match state.takeoff.as_ref().map(|(_, l)| l) {
+        Some(Ok(lines)) => takeoff::items(lines),
+        _ => Vec::new(),
+    };
+    let mut tool = None;
+    let mut section = None;
+    let mut apply = false;
+    let mut export = false;
+    let mut export_takeoff = false;
+    let mut select = None;
+    match active {
+        Some(current) => {
+            let (icon, title) = TOOLBAR.iter().find(|(_, _, t)| *t == current).map_or(("ruler", "Measure"), |(i, l, _)| (*i, *l));
+            ui.horizontal(|ui| {
+                crate::icons::paint(ui, egui::Rect::from_min_size(ui.cursor().min, egui::vec2(20.0, 20.0)), icon, 18.0, t.accent);
+                ui.add_space(24.0);
+                ui.label(egui::RichText::new(tl!(title)).font(crate::theme::semibold(15.0)).color(t.text));
+            });
+            ui.label(
+                egui::RichText::new(match current {
+                    Tool::Distance => tl!("Click two points on the drawing."),
+                    Tool::Perimeter => tl!("Click each vertex. Enter or double-click finishes."),
+                    Tool::Area => tl!("Click each corner. Click the first point or press Enter to close."),
+                    Tool::Count | Tool::Calibrate => tl!("Click each symbol to place a numbered marker."),
+                })
+                .color(t.text_muted),
+            );
+            item_box(ui, t, state, &items);
+            if current == Tool::Count {
+                count_style(ui, t, state);
+            } else {
+                line_style(ui, t, state);
+                label_style(ui, t, state);
+                heading(ui, t, tl!("Measurement"));
+                match &state.reading {
+                    Some(reading) => {
+                        ui.label(egui::RichText::new(&reading.label).strong());
+                        ui.label(format!("X: {:.3}   Y: {:.3}   {}: {:.2}°", reading.delta_x, reading.delta_y, tl!("Angle"), reading.angle));
+                    }
+                    None => {
+                        ui.label(tl!("Click the first point to begin."));
+                    }
+                }
+                ui.label(egui::RichText::new(tl!("Shift constrains to 45 degrees. Backspace removes a vertex. Escape cancels.")).color(t.text_muted));
+            }
+            snapping(ui, state);
+            ui.separator();
+            let at = doc.measurement_to_user(page, [0.0, 0.0]).unwrap_or([0.0, 0.0]);
+            if let Ok(scale) = doc.measurement_scale(page, at) {
+                ui.label(egui::RichText::new(format!("{}: {}", tl!("Scale"), scale.ratio)).color(t.text_muted));
+            }
+            if ui.button(tl!("Change drawing scale")).clicked() {
+                section = Some(Section::Scale);
             }
         }
+        None if state.section == Section::Scale || calibrating => {
+            ui.label(egui::RichText::new(tl!("Drawing scale")).font(crate::theme::semibold(15.0)).color(t.text));
+            ui.label(
+                egui::RichText::new(tl!("Set the scale before measuring. Saved measurements keep the scale they were drawn with."))
+                    .color(t.text_muted),
+            );
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut state.drawing_points).range(0.000001..=1e9).prefix("pt "));
+                ui.label("=");
+                ui.add(egui::DragValue::new(&mut state.real_distance).range(0.000001..=1e12));
+            });
+            ui.horizontal(|ui| {
+                ui.label(tl!("Unit"));
+                ui.add(egui::TextEdit::singleline(&mut state.unit).desired_width(64.0).char_limit(12));
+                ui.add(egui::DragValue::new(&mut state.precision).range(0..=6).prefix(format!("{} ", tl!("Decimals"))));
+            });
+            if ui.selectable_label(calibrating, tl!("Calibrate from two points")).clicked() {
+                tool = Some(Tool::Calibrate);
+            }
+            if calibrating {
+                ui.label(egui::RichText::new(tl!("Click both ends of a known length, then type its real length above.")).color(t.text_muted));
+            }
+            ui.checkbox(&mut state.whole_page, tl!("Entire page"));
+            if !state.whole_page {
+                ui.label(tl!("Viewport rectangle in page points (x, y, width, height)"));
+                for (i, name) in ["X", "Y", "Width", "Height"].iter().enumerate() {
+                    if let Some(v) = state.rect.get_mut(i) {
+                        ui.add(egui::DragValue::new(v).range(0.0..=1e9).prefix(format!("{}: ", tl!(name))));
+                    }
+                }
+            }
+            ui.horizontal(|ui| {
+                ui.label(tl!("Viewport"));
+                ui.add(egui::TextEdit::singleline(&mut state.name).desired_width(130.0).char_limit(128));
+            });
+            apply = ui.add_enabled(doc.allows_annotation(), egui::Button::new(tl!("Apply scale"))).clicked();
+        }
+        None => {
+            ui.label(egui::RichText::new(tl!("Take-off")).font(crate::theme::semibold(15.0)).color(t.text));
+            ui.label(egui::RichText::new(tl!("Pick a tool from the toolbar above the page to measure or count.")).color(t.text_muted));
+            match state.takeoff.as_ref().map(|(_, l)| l) {
+                None => {}
+                Some(Ok(lines)) if lines.is_empty() => {
+                    ui.label(tl!("Label measurements or place counts to build a take-off."));
+                }
+                Some(Ok(lines)) => {
+                    egui::Grid::new("takeoff-grid").striped(true).show(ui, |ui| {
+                        for l in lines {
+                            ui.label(&l.item);
+                            let precision = if l.quantity == takeoff::Quantity::Count { 0 } else { usize::from(state.precision.min(6)) };
+                            ui.label(format!("{:.precision$} {}", l.total, l.unit));
+                            ui.end_row();
+                        }
+                    });
+                }
+                Some(Err(e)) => {
+                    ui.colored_label(Color32::from_rgb(190, 50, 50), e);
+                }
+            }
+            export_takeoff = ui.button(tl!("Export take-off as CSV")).clicked();
+            ui.separator();
+            match state.listing.as_ref().map(|(_, l)| l) {
+                None => {}
+                Some(Ok(listing)) => {
+                    ui.label(format!("{}: {}", tl!("Saved measurements"), listing.measurements.len()));
+                    if !listing.unsupported.is_empty() {
+                        let reasons: Vec<String> =
+                            listing.unsupported.iter().map(|u| format!("{} {}: {}", tl!("Page"), u.page.saturating_add(1), u.reason)).collect();
+                        ui.colored_label(
+                            Color32::from_rgb(190, 120, 30),
+                            format!("{}: {}", tl!("Unsupported measurements"), listing.unsupported.len()),
+                        )
+                        .on_hover_text(reasons.join("\n"));
+                    }
+                    egui::ScrollArea::vertical().id_salt("measurement-list").max_height(160.0).show(ui, |ui| {
+                        for m in &listing.measurements {
+                            if ui.button(format!("{} {}: {} {}", tl!("Page"), m.page.saturating_add(1), m.reading.label, m.label)).clicked() {
+                                select = Some((m.page, m.index, m.reading.clone(), m.scale.clone()));
+                            }
+                        }
+                    });
+                }
+                Some(Err(e)) => {
+                    ui.colored_label(Color32::from_rgb(190, 50, 50), e);
+                }
+            }
+            export = ui.button(tl!("Export measurements as CSV")).clicked();
+        }
     }
-    ui.horizontal(|ui| {
-        ui.label(tl!("Viewport"));
-        ui.add(egui::TextEdit::singleline(&mut state.name).desired_width(130.0).char_limit(128));
-    });
-    let apply = ui.add_enabled(doc.allows_annotation(), egui::Button::new(tl!("Apply scale"))).clicked();
     if let Some(error) = &state.error {
         ui.colored_label(Color32::from_rgb(190, 50, 50), error);
     }
-    ui.separator();
-    let mut select = None;
-    match state.listing.as_ref().map(|(_, l)| l) {
-        None => {}
-        Some(Ok(listing)) => {
-            ui.label(format!("{}: {}", tl!("Saved measurements"), listing.measurements.len()));
-            if !listing.unsupported.is_empty() {
-                let reasons: Vec<String> =
-                    listing.unsupported.iter().map(|u| format!("{} {}: {}", tl!("Page"), u.page.saturating_add(1), u.reason)).collect();
-                ui.colored_label(Color32::from_rgb(190, 120, 30), format!("{}: {}", tl!("Unsupported measurements"), listing.unsupported.len()))
-                    .on_hover_text(reasons.join("\n"));
-            }
-            egui::ScrollArea::vertical().id_salt("measurement-list").max_height(140.0).show(ui, |ui| {
-                for m in &listing.measurements {
-                    if ui.button(format!("{} {}: {} {}", tl!("Page"), m.page.saturating_add(1), m.reading.label, m.label)).clicked() {
-                        select = Some((m.page, m.index, m.reading.clone(), m.scale.clone()));
-                    }
-                }
-            });
-        }
-        Some(Err(e)) => {
-            ui.colored_label(Color32::from_rgb(190, 50, 50), e);
-        }
+    if let Some(section) = section {
+        state.section = section;
     }
-    let export = ui.button(tl!("Export measurements as CSV")).clicked();
-    ui.separator();
-    ui.label(tl!("Take-off"));
-    match state.takeoff.as_ref().map(|(_, l)| l) {
-        None => {}
-        Some(Ok(lines)) if lines.is_empty() => {
-            ui.label(tl!("Label measurements or place counts to build a take-off."));
-        }
-        Some(Ok(lines)) => {
-            egui::Grid::new("takeoff-grid").striped(true).show(ui, |ui| {
-                for l in lines {
-                    ui.label(&l.item);
-                    let precision = if l.quantity == takeoff::Quantity::Count { 0 } else { usize::from(state.precision.min(6)) };
-                    ui.label(format!("{:.precision$} {}", l.total, l.unit));
-                    ui.end_row();
-                }
-            });
-        }
-        Some(Err(e)) => {
-            ui.colored_label(Color32::from_rgb(190, 50, 50), e);
-        }
-    }
-    let export_takeoff = ui.button(tl!("Export take-off as CSV")).clicked();
     if apply && let Some(info) = info {
         let result =
             doc.measurement_to_user(page, [0.0, 0.0]).and_then(|a| doc.measurement_to_user(page, [1.0, 0.0]).map(|b| (a, b))).and_then(|(a, b)| {
@@ -479,6 +702,9 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             }
             Err(e) => state.error = Some(e.to_string()),
         }
+    }
+    if section.is_some() {
+        app.quick_tool = QuickTool::Select;
     }
     if let Some((page, annotation, reading, scale)) = select {
         app.views[index].current = page;

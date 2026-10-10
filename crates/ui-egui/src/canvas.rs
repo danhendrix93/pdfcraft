@@ -2618,6 +2618,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         run_button(app, index, &name, action);
     }
     quick_bar(app, avail, ui);
+    crate::measure_ui::toolbar(app, avail, ui);
 }
 
 /// Run a push button's action (the ones that need no JavaScript engine).

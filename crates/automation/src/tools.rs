@@ -530,7 +530,7 @@ pub fn tools() -> Vec<ToolDef> {
         t("measure_export", "Export measurements as CSV", "Atomically write saved measurement values, labels, authors and scale ratios as spreadsheet-safe CSV. Returns how many unsupported measurements were left out.")
             .cmd("measure.export").with(schema(json!({"doc":doc(),"out":path_arg()}), &["doc","out"])),
         t("takeoff_count", "Place a count marker", "Add an undoable numbered count marker (a small filled circle) centred at a point, for counting symbols such as gullies or manholes. Markers are numbered per item across the document.")
-            .with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"at":point(),"item":{"type":"string","minLength":1,"maxLength":512},"color":color(),"author":{"type":"string","maxLength":512}}), &["doc","page","at","item"])),
+            .with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"at":point(),"item":{"type":"string","minLength":1,"maxLength":512},"color":color(),"size":{"type":"number","minimum":4,"maximum":48},"author":{"type":"string","maxLength":512}}), &["doc","page","at","item"])),
         t("takeoff_counts", "List count markers", "Saved count markers with their item, number and centre in display coordinates.")
             .ro().with(schema(json!({"doc":doc()}), &["doc"])),
         t("takeoff_summary", "Quantity take-off summary", "Count markers and saved measurements totalled per take-off item. A measurement's label names its item; blank labels are grouped as Untagged. Markers total as count (unit nr), distances and perimeters as length, areas as area, one line per item and unit. Returns how many unsupported measurements were left out.")
