@@ -46,6 +46,8 @@ pub enum Quantity {
     Count,
     Length,
     Area,
+    /// An area with a depth.
+    Volume,
 }
 impl Quantity {
     pub fn of(kind: Kind) -> Self {
@@ -59,6 +61,7 @@ impl Quantity {
             Self::Count => "count",
             Self::Length => "length",
             Self::Area => "area",
+            Self::Volume => "volume",
         }
     }
 }
@@ -197,20 +200,82 @@ pub struct Look {
     pub caption: Caption,
     /// Caption text size in points (clamped to 4..=72).
     pub caption_size: f64,
+    /// Areas only: a depth that turns the area into a volume.
+    pub depth: Option<Depth>,
 }
 impl Default for Look {
     fn default() -> Self {
-        Self { dashed: false, caption: Caption::Value, caption_size: 10.0 }
+        Self { dashed: false, caption: Caption::Value, caption_size: 10.0, depth: None }
     }
+}
+
+/// Depth of an area in the scale's length unit. The volume uses the average of the two,
+/// so a fixed depth has `start == end` and a fall (e.g. 150 mm to 300 mm) differs.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct Depth {
+    pub start: f64,
+    pub end: f64,
+}
+impl Depth {
+    pub fn average(self) -> Option<f64> {
+        let d = (self.start + self.end) / 2.0;
+        (self.start.is_finite() && self.end.is_finite() && self.start >= 0.0 && self.end >= 0.0 && d > 0.0 && d <= 1e9).then_some(d)
+    }
+}
+const DEPTH_KEY: &[u8] = b"PCTakeoffDepth";
+
+/// An area measurement's volume.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Volume {
+    pub page: usize,
+    pub index: usize,
+    pub item: String,
+    pub depth: Depth,
+    pub value: f64,
+    pub unit: String,
+}
+/// Volumes of the area measurements that have a depth.
+pub fn volumes(doc: &Document, measurements: &[Measurement]) -> Vec<Volume> {
+    let pages = pdfcraft_model::pages(doc);
+    let mut out = Vec::new();
+    for m in measurements.iter().filter(|m| m.reading.kind == Kind::Area) {
+        let Some(p) = pages.get(m.page) else { continue };
+        let Some(list) = p.dict.get(b"Annots").map(|o| doc.resolve(o)) else { continue };
+        let Some(a) = list.as_array().and_then(|a| a.get(m.index)).map(|o| doc.resolve(o)) else { continue };
+        let Some(d) = a.as_dict() else { continue };
+        let depth: Option<Vec<f64>> = d.get(DEPTH_KEY).and_then(Object::as_array).and_then(|v| v.iter().map(Object::as_f64).collect());
+        let Some(&[start, end]) = depth.as_deref() else { continue };
+        let depth = Depth { start, end };
+        let Some(avg) = depth.average() else { continue };
+        let value = m.reading.value * avg;
+        if value.is_finite() {
+            out.push(Volume { page: m.page, index: m.index, item: m.label.clone(), depth, value, unit: format!("{}^3", m.scale.unit) });
+        }
+    }
+    out
 }
 
 /// Apply `look` to the measurement annotation at `index` on `page` (just added by
 /// `pdfcraft_measure::add`) and regenerate its appearance.
-pub fn apply_look(doc: &mut Document, page: usize, index: usize, look: &Look) -> Result<()> {
+pub fn apply_look(doc: &mut Document, page: usize, index: usize, look: &Look, measurement: &pdfcraft_measure::NewMeasurement) -> Result<()> {
     if *look == Look::default() {
         return Ok(());
     }
     let (obj, mut d) = annotation(doc, page, index)?;
+    let mut volume = None;
+    if let Some(depth) = look.depth.filter(|_| measurement.kind == Kind::Area) {
+        let avg = depth.average().ok_or_else(|| invalid("depth must be positive and finite"))?;
+        let area = pdfcraft_measure::reading(Kind::Area, &measurement.points, &measurement.scale).map_err(|e| invalid(&e.to_string()))?;
+        let p = usize::from(measurement.scale.precision);
+        let unit = &measurement.scale.unit;
+        let depth_text = if (depth.start - depth.end).abs() < 1e-12 {
+            format!("{:.p$} {unit}", depth.start)
+        } else {
+            format!("{:.p$}-{:.p$} {unit}", depth.start, depth.end)
+        };
+        volume = Some(format!("{} x {depth_text} = {:.p$} {unit}^3", area.label, area.value * avg));
+        d.set(DEPTH_KEY.to_vec(), Object::Array(vec![Object::Real(depth.start), Object::Real(depth.end)]));
+    }
     if look.dashed {
         let mut bs = d.get(b"BS").and_then(Object::as_dict).cloned().unwrap_or_default();
         if !bs.contains(b"W") {
@@ -220,7 +285,7 @@ pub fn apply_look(doc: &mut Document, page: usize, index: usize, look: &Look) ->
         bs.set(b"D".to_vec(), Object::Array(vec![Object::Real(4.0), Object::Real(3.0)]));
         d.set(b"BS".to_vec(), Object::Dict(bs));
     }
-    let value = d.get(b"PCMeasureValue").and_then(Object::as_string).map(PdfString::to_text).unwrap_or_default();
+    let value = volume.unwrap_or_else(|| d.get(b"PCMeasureValue").and_then(Object::as_string).map(PdfString::to_text).unwrap_or_default());
     let item = d.get(b"PCMeasureLabel").and_then(Object::as_string).map(PdfString::to_text).unwrap_or_default();
     let caption = match look.caption {
         Caption::Value => value,
@@ -275,6 +340,10 @@ pub struct Line {
 /// units (a sheet calibrated in metres and another in feet) stay on separate lines rather
 /// than being converted.
 pub fn summarise(measurements: &[Measurement], counts: &[Count]) -> Vec<Line> {
+    summarise_all(measurements, counts, &[])
+}
+/// [`summarise`] plus a volume line per item and unit for areas with a depth.
+pub fn summarise_all(measurements: &[Measurement], counts: &[Count], volumes: &[Volume]) -> Vec<Line> {
     let mut lines: BTreeMap<(String, Quantity, String), Line> = BTreeMap::new();
     let mut add = |label: &str, quantity: Quantity, unit: &str, value: f64, page: usize| {
         let name = item_name(label);
@@ -300,6 +369,9 @@ pub fn summarise(measurements: &[Measurement], counts: &[Count]) -> Vec<Line> {
     }
     for m in measurements {
         add(&m.label, Quantity::of(m.reading.kind), &m.reading.unit, m.reading.value, m.page);
+    }
+    for v in volumes {
+        add(&v.item, Quantity::Volume, &v.unit, v.value, v.page);
     }
     lines.into_values().collect()
 }

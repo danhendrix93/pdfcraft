@@ -63,6 +63,12 @@ pub struct MeasureView {
     pub caption_size: f64,
     pub count_color: [f64; 3],
     pub count_size: f64,
+    /// Area tool: give the area a depth to take off a volume.
+    pub depth_on: bool,
+    /// Depth differs between the start and end (a fall) rather than being fixed.
+    pub depth_varies: bool,
+    pub depth_start: f64,
+    pub depth_end: f64,
     pub points: Vec<Point>,
     pub page: Option<usize>,
     pub tool: Option<Tool>,
@@ -102,6 +108,10 @@ impl Default for MeasureView {
             caption_size: 10.0,
             count_color: [0.89, 0.13, 0.13],
             count_size: takeoff::MARKER_SIZE,
+            depth_on: false,
+            depth_varies: false,
+            depth_start: 0.15,
+            depth_end: 0.15,
             points: Vec::new(),
             page: None,
             tool: None,
@@ -329,7 +339,9 @@ fn finish(state: &mut MeasureView, pending: &mut Option<Edit>, doc: &Document, p
             label: state.label.clone(),
             author: author.into(),
         };
-        let look = takeoff::Look { dashed: state.dashed, caption: state.caption, caption_size: state.caption_size };
+        let depth = (tool == Tool::Area && state.depth_on)
+            .then(|| takeoff::Depth { start: state.depth_start, end: if state.depth_varies { state.depth_end } else { state.depth_start } });
+        let look = takeoff::Look { dashed: state.dashed, caption: state.caption, caption_size: state.caption_size, depth };
         *pending = Some(if look == takeoff::Look::default() {
             Edit::AddMeasurement(measurement)
         } else {
@@ -486,6 +498,27 @@ fn count_style(ui: &mut egui::Ui, t: &Tokens, state: &mut MeasureView) {
     swatches(ui, t, &mut state.count_color);
     ui.add(egui::Slider::new(&mut state.count_size, 4.0..=48.0).step_by(1.0).text(tl!("Size")));
 }
+fn volume_style(ui: &mut egui::Ui, t: &Tokens, state: &mut MeasureView, unit: &str) {
+    heading(ui, t, tl!("Volume"));
+    ui.checkbox(&mut state.depth_on, tl!("Give the area a depth"));
+    if state.depth_on {
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut state.depth_varies, false, tl!("Fixed depth"));
+            ui.selectable_value(&mut state.depth_varies, true, tl!("Start and end"));
+        });
+        ui.horizontal(|ui| {
+            ui.label(if state.depth_varies { tl!("Start") } else { tl!("Depth") });
+            ui.add(egui::DragValue::new(&mut state.depth_start).range(0.0..=1e6).speed(0.01).suffix(format!(" {unit}")));
+        });
+        if state.depth_varies {
+            ui.horizontal(|ui| {
+                ui.label(tl!("End"));
+                ui.add(egui::DragValue::new(&mut state.depth_end).range(0.0..=1e6).speed(0.01).suffix(format!(" {unit}")));
+            });
+        }
+        ui.label(egui::RichText::new(tl!("Volume = area × average depth. Use the same unit as the drawing scale.")).color(t.text_muted));
+    }
+}
 fn snapping(ui: &mut egui::Ui, state: &mut MeasureView) {
     egui::CollapsingHeader::new(tl!("Snapping")).id_salt("measure-snapping").show(ui, |ui| {
         ui.checkbox(&mut state.snap_enabled, tl!("Snap to drawing"));
@@ -600,10 +633,21 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             } else {
                 line_style(ui, t, state);
                 label_style(ui, t, state);
+                if current == Tool::Area {
+                    let at = doc.measurement_to_user(page, [0.0, 0.0]).unwrap_or([0.0, 0.0]);
+                    let unit = doc.measurement_scale(page, at).map(|s| s.unit).unwrap_or_else(|_| state.unit.clone());
+                    volume_style(ui, t, state, &unit);
+                }
                 heading(ui, t, tl!("Measurement"));
                 match &state.reading {
                     Some(reading) => {
                         ui.label(egui::RichText::new(&reading.label).strong());
+                        if current == Tool::Area && state.depth_on {
+                            let end = if state.depth_varies { state.depth_end } else { state.depth_start };
+                            let precision = state.scale.as_ref().map_or(2, |s| usize::from(s.precision));
+                            let unit = state.scale.as_ref().map_or(String::new(), |s| s.unit.clone());
+                            ui.label(format!("{} {:.precision$} {unit}^3", tl!("Volume"), reading.value * (state.depth_start + end) / 2.0));
+                        }
                         ui.label(format!("X: {:.3}   Y: {:.3}   {}: {:.2}°", reading.delta_x, reading.delta_y, tl!("Angle"), reading.angle));
                     }
                     None => {
@@ -825,7 +869,7 @@ fn trim_number(v: f64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 fn takeoff_lines(doc: &Document) -> Result<Vec<takeoff::Line>, String> {
-    Ok(takeoff::summarise(&doc.measurements()?.measurements, &doc.counts()?))
+    Ok(takeoff::summarise_all(&doc.measurements()?.measurements, &doc.counts()?, &doc.volumes()?))
 }
 pub(crate) fn command(app: &mut PdfCraftApp, id: &str) {
     app.left = LeftPanel::Tool("measure");

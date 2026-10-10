@@ -294,6 +294,11 @@ impl Document {
         let e = self.editor.as_ref().ok_or("the document can't be read")?;
         takeoff::viewport::viewports(&e.cos, page).map_err(|e| e.to_string())
     }
+    /// Volumes of area measurements that have a take-off depth.
+    pub fn volumes(&self) -> Result<Vec<takeoff::Volume>, String> {
+        let e = self.editor.as_ref().ok_or("the document can't be read")?;
+        Ok(takeoff::volumes(&e.cos, &measure::list(&e.cos).measurements))
+    }
     /// Saved take-off count markers.
     pub fn counts(&self) -> Result<Vec<takeoff::Count>, String> {
         let e = self.editor.as_ref().ok_or("the document can't be read")?;
@@ -1509,7 +1514,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         }
         Edit::AddTakeoffMeasurement { measurement, look } => {
             let index = measure::add(doc, measurement, &cx.meta())?;
-            takeoff::apply_look(doc, measurement.page, index, look)?;
+            takeoff::apply_look(doc, measurement.page, index, look, measurement)?;
         }
         Edit::SetMeasurementScale { page, bbox, name, scale } => measure::set_scale(doc, *page, *bbox, name, scale)?,
         Edit::ReplaceMeasurementScale { page, index, bbox, name, scale } => {

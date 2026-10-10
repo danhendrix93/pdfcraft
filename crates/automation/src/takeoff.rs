@@ -36,7 +36,8 @@ impl Automation {
         let doc = self.doc(a)?;
         let all = doc.measurements().map_err(failed)?;
         let counts = doc.counts().map_err(failed)?;
-        Ok((takeoff::summarise(&all.measurements, &counts), all.unsupported.len(), all.truncated))
+        let volumes = doc.volumes().map_err(failed)?;
+        Ok((takeoff::summarise_all(&all.measurements, &counts, &volumes), all.unsupported.len(), all.truncated))
     }
     pub(crate) fn takeoff_summary(&self, a: &Args) -> Result<Value> {
         let (lines, unsupported, truncated) = self.takeoff_lines(a)?;
